@@ -89,42 +89,53 @@ export default function VendorsPage() {
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {filtered.map((r) => (
-          <li
-            key={r.vendor_id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              padding: "12px 4px",
-              borderBottom: "1px solid #f0f0f0",
-            }}
-          >
-            <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>
-              [{r.market_name ?? "-"}]
-            </span>
+        <li key={r.vendor_id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+        <Link
+        href={`/vendors/${r.vendor_id}/receipts/new`}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "12px 4px",
+          textDecoration: "none",
+          color: "inherit",
+        }}
+      >
+        {/* [market] */}
+        <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>
+          [{r.market_name ?? "-"}]
+        </span>
 
-            <span style={{ fontSize: 14 }}>{capabilityDot(r)}</span>
+        {/* ●/○ */}
+        <span style={{ fontSize: 14 }}>
+          {capabilityDot(r)}
+        </span>
 
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {(r.stall_no ? `[${r.stall_no}] ` : "")}{r.name}
-              </div>
-            </div>
+        {/* (stall_no + name) */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {(r.stall_no ? `[${r.stall_no}] ` : "")}{r.name}
+          </div>
+        </div>
 
-            <span
-              style={{
-                fontSize: 12,
-                padding: "4px 8px",
-                borderRadius: 999,
-                border: "1px solid #ddd",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {statusLabel(r.status_summary)}
-            </span>
-          </li>
-        ))}
-      </ul>
+        {/* [status] */}
+        <span
+          style={{
+            fontSize: 12,
+            padding: "4px 8px",
+            borderRadius: 999,
+            border: "1px solid #ddd",
+            whiteSpace: "nowrap",
+          }}
+          title={r.status_summary ?? ""}
+        >
+          {statusLabel(r.status_summary)}
+        </span>
+      </Link>
+    </li>
+  ))}
+</ul>
+
     </div>
   );
 }
