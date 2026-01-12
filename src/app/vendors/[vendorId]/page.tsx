@@ -5,6 +5,11 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
+<Link href="/receipts" style={{ textDecoration: "underline", fontSize: 14 }}>
+  전체 영수증 보기 →
+</Link>
+
+
 type VendorInfo = {
   id: string;
   name: string;
