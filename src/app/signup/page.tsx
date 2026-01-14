@@ -20,7 +20,7 @@ export default function SignupPage() {
     if (data.session) {
       router.push("/vendors");
     } else {
-      setMsg("가입 완료! 이메일 인증 후 로그인해줘.");
+      setMsg("가입 완료!");
     }
   }
 
