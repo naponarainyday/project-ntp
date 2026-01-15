@@ -16,9 +16,15 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const router = useRouter();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  const isVendors = pathname?.startsWith("/vendors") || pathname === "/";
-  const isReceipts = pathname?.startsWith("/receipts");
-  const title = isReceipts ? "영수증 내역" : "내 상가";
+  const isSettings = pathname?.startsWith('/settings')
+  const isVendors = pathname?.startsWith('/vendors') || pathname === '/'
+  const isReceipts = pathname?.startsWith('/receipts')
+
+  const title =
+    isSettings ? '마이페이지' :
+    isReceipts ? '영수증 내역' :
+    '영수증 신규 등록'
+
 
   // ✅ ESC로 닫기 + Drawer 열렸을 때 스크롤 잠금
   useEffect(() => {
@@ -36,6 +42,12 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       document.body.style.overflow = "";
     };
   }, [isDrawerOpen]);
+
+  // ✅ 페이지 이동 시 Drawer 자동 닫기
+  useEffect(() => {
+    setIsDrawerOpen(false);
+  }, [pathname]);
+
 
   // ✅ 로그아웃
   const handleLogout = async () => {
@@ -107,7 +119,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     <span className="text-xl" aria-hidden>
                       🏠
                     </span>
-                    내 상가 관리
+                    영수증 신규 등록
                   </Link>
 
                   <Link
@@ -123,8 +135,24 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     <span className="text-xl" aria-hidden>
                       📄
                     </span>
-                    전체 영수증 내역
+                    영수증 내역
                   </Link>
+                  <Link
+                    href="/settings"
+                    onClick={() => setIsDrawerOpen(false)}
+                    className={cn(
+                      "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
+                      isSettings
+                        ? "bg-blue-50 text-blue-600"
+                        : "text-gray-700 hover:bg-gray-100"
+                    )}
+                  >
+                    <span className="text-xl" aria-hidden>
+                      👤
+                    </span>
+                    마이페이지
+                  </Link>
+
                 </nav>
 
                 <div className="my-6 border-t border-gray-100" />
@@ -154,7 +182,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           "
           aria-label="하단 내비게이션"
         >
-          <div className="flex h-16 items-center justify-between px-6">
+          <div className="flex h-16 items-center justify-between px-4">
             {/* 메뉴 */}
             <button
               type="button"
@@ -200,6 +228,21 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               </span>
               <span className="text-[10px]">내역</span>
             </Link>
+            {/* 마이 */}
+            <Link
+              href="/settings"
+              className={cn(
+                "flex flex-col items-center",
+                isSettings && !isDrawerOpen ? "text-blue-600" : "text-gray-500"
+              )}
+              aria-current={isSettings ? "page" : undefined}
+            >
+              <span className="text-2xl" aria-hidden>
+                👤
+              </span>
+              <span className="text-[10px]">마이</span>
+            </Link>
+
           </div>
         </nav>
       </div>
