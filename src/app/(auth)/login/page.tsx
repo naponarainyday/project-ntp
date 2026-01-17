@@ -13,23 +13,39 @@ export default function LoginPage() {
 
   async function signIn() {
     setMsg("");
+    console.log("[login] clicked")
+
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password: pw,
     });
+
+    console.log("[login] signInWithPassworderror:", error?.message ?? null);
+
     if (error) return setMsg(error.message);
-    router.push("/vendors");
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    console.log("[login] session after login:", sessionData.session);
+
+    // ✅ 홈으로 (이제 홈이 /)
+    router.replace("/");
   }
 
   async function signInWithGoogle() {
     setMsg("");
+
+    // ✅ (auth) route group의 callback 실제 URL은 "/callback"
+    // ✅ next 파라미터 기본은 "/"로 두는 게 자연스럽고,
+    //    필요하면 특정 경로로도 보낼 수 있음.
+    const redirectTo = `${window.location.origin}/callback?next=/`;
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=/vendors`,
-      },
+      options: { redirectTo },
     });
+
     if (error) setMsg(error.message);
+    // 성공 시에는 구글 OAuth로 이동하므로 여기서 router.push 필요 없음
   }
 
   return (
