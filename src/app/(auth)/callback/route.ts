@@ -1,9 +1,36 @@
+// src/app/(auth)/callback/route.ts
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
 export async function GET(request: Request) {
-  // supabase-js가 브라우저에서 자동 처리(PKCE 등)하는 케이스가 많아서,
-  // MVP에선 콜백 도착 후 vendors로 보내는 것만 해도 충분.
   const url = new URL(request.url);
-  const next = url.searchParams.get("next") ?? "/vendors";
+  const code = url.searchParams.get("code");
+  const next = url.searchParams.get("next") || "/";
+
+  const cookieStore = cookies();
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+        set(name: string, value: string, options: CookieOptions) {
+          cookieStore.set({ name, value, ...options });
+        },
+        remove(name: string, options: CookieOptions) {
+          cookieStore.set({ name, value: "", ...options });
+        },
+      },
+    }
+  );
+
+  if (code) {
+    await supabase.auth.exchangeCodeForSession(code);
+  }
+
   return NextResponse.redirect(new URL(next, url.origin));
 }

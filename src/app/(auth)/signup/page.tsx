@@ -18,7 +18,7 @@ export default function SignupPage() {
 
     // Confirm email ON이면 session이 null일 수 있음 (정상)
     if (data.session) {
-      router.push("/vendors");
+      router.replace("/");
     } else {
       setMsg("가입 완료!");
     }

@@ -17,15 +17,60 @@ type VendorRow = {
 };
 
 function capabilityDot(v: VendorRow) {
-  return v.invoice_capability === "supported" ? "●" : "○";
+  return v.invoice_capability === "supported" ? "🔴" : "🔘";
 }
 
-function statusLabel(s: VendorRow["status_summary"]) {
-  if (s === "needs_fix") return "수정";
-  if (s === "requested") return "요청";
-  if (s === "uploaded") return "업로드";
-  if (s === "completed") return "완료";
-  return "";
+function formatStallNo(stallNo: string | null) {
+  if (!stallNo) return "";
+  const t = `${stallNo}`.trim();
+  if (!t) return "";
+  return t.endsWith("호") ? t : `${t}호`;
+}
+
+function NameLine({ name, stallNo }: { name: string; stallNo: string | null }) {
+  const stallText = formatStallNo(stallNo);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 6,
+        minWidth: 0,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {/* name: 주 텍스트 (ellipsis 대상) */}
+      <span
+        style={{
+          fontSize: 16,
+          fontWeight: 700,
+          color: "#111",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          minWidth: 0,
+        }}
+      >
+        {name}
+      </span>
+
+      {/* stall_no: 보조 텍스트 (superscript 느낌) */}
+      {stallText ? (
+        <span
+          style={{
+            fontSize: 14,
+            fontWeight: 500,
+            color: "#555",
+            transform: "translateY(0px)", // 네가 현재 0으로 둔 상태 유지
+            flexShrink: 0,
+          }}
+        >
+          {stallText}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 export default function VendorsPage() {
@@ -61,16 +106,33 @@ export default function VendorsPage() {
     });
   }, [q, rows]);
 
+  // 🔴 supported 상가만 상단 섹션으로 분리
+  const supportedVendors = useMemo(() => {
+    return filtered.filter((v) => v.invoice_capability === "supported");
+  }, [filtered]);
+
+  // 시장별 그룹 (드랍다운)
+  const groupedByMarket = useMemo(() => {
+    const map = new Map<string, VendorRow[]>();
+    for (const v of filtered) {
+      const key = v.market_name ?? "기타";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(v);
+    }
+
+    const groups = Array.from(map.entries()).map(([market, list]) => {
+      const sortOrder = list.find((x) => x.market_name === market)?.market_sort_order ?? 999999;
+      return { market, sortOrder, list };
+    });
+
+    groups.sort((a, b) => (a.sortOrder ?? 999999) - (b.sortOrder ?? 999999));
+    return groups;
+  }, [filtered]);
+
   return (
     <div style={{ maxWidth: 420, margin: "0 auto", padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700 }}>상가</h1>
-        <Link href="/vendors/all" style={{ fontSize: 14, textDecoration: "underline" }}>
-          전체 리스트 보기 →
-        </Link>
-      </div>
-
-      <div style={{ marginTop: 12 }}>
+      {/* 검색 */}
+      <div style={{ marginTop: 0 }}>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -85,57 +147,142 @@ export default function VendorsPage() {
         />
       </div>
 
-      <div style={{ marginTop: 12, borderTop: "1px solid #eee" }} />
-
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {filtered.map((r) => (
-        <li key={r.vendor_id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-        <Link
-        href={`/vendors/${r.vendor_id}/receipts/new`}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "12px 4px",
-          textDecoration: "none",
-          color: "inherit",
-        }}
-      >
-        {/* [market] */}
-        <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>
-          [{r.market_name ?? "-"}]
-        </span>
-
-        {/* ●/○ */}
-        <span style={{ fontSize: 14 }}>
-          {capabilityDot(r)}
-        </span>
-
-        {/* (stall_no + name) */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {(r.stall_no ? `[${r.stall_no}] ` : "")}{r.name}
-          </div>
+      {/* 🔴 supported 섹션 */}
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+          🔴 세금계산서 지원 상가
         </div>
 
-        {/* [status] */}
-        <span
-          style={{
-            fontSize: 12,
-            padding: "4px 8px",
-            borderRadius: 999,
-            border: "1px solid #ddd",
-            whiteSpace: "nowrap",
-          }}
-          title={r.status_summary ?? ""}
-        >
-          {statusLabel(r.status_summary)}
-        </span>
-      </Link>
-    </li>
-  ))}
-</ul>
+        {supportedVendors.length === 0 ? (
+          <div style={{ fontSize: 13, opacity: 0.7 }}>검색 조건에 해당하는 지원 상가가 없어요.</div>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {supportedVendors.map((v) => (
+              <li key={v.vendor_id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                <Link
+                  href={`/vendors/${v.vendor_id}/receipts/new`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 4px",
+                    textDecoration: "none",
+                    color: "inherit",
+                  }}
+                >
+                  <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>
+                    [{v.market_name ?? "-"}]
+                  </span>
 
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{capabilityDot(v)}</span>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <NameLine name={v.name} stallNo={v.stall_no} />
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div style={{ marginTop: 18, borderTop: "2px solid #ddd" }} />
+
+      {/* 시장별 드랍다운: 기본 펼침 */}
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>시장별 보기</div>
+
+        {groupedByMarket.map((g) => (
+          <details
+            key={g.market}
+            open
+            className="market-details"
+            style={{ border: "1px solid #eee", borderRadius: 12, marginBottom: 10 }}
+          >
+            <summary
+              style={{
+                padding: "10px 12px",
+                cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 700,
+                listStyle: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              {/* 왼쪽: 시장명 + 카운트 */}
+              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {g.market}
+                </span>
+                <span style={{ fontSize: 12, opacity: 0.7, flexShrink: 0 }}>({g.list.length})</span>
+              </span>
+
+              {/* 오른쪽: 커스텀 화살표 */}
+              <span
+                className="market-chevron"
+                aria-hidden
+                style={{
+                  fontSize: 14,
+                  opacity: 0.7,
+                  lineHeight: 1,
+                  flexShrink: 0,
+                }}
+              >
+                ▶︎
+              </span>
+            </summary>
+
+            <div style={{ padding: "0 8px 8px 8px" }}>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {g.list.map((v) => (
+                  <li key={v.vendor_id} style={{ borderBottom: "1px solid #f3f3f3" }}>
+                    <Link
+                      href={`/vendors/${v.vendor_id}/receipts/new`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 6px",
+                        textDecoration: "none",
+                        color: "inherit",
+                      }}
+                    >
+                      <span style={{ fontSize: 14, lineHeight: 1 }}>{capabilityDot(v)}</span>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <NameLine name={v.name} stallNo={v.stall_no} />
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </details>
+        ))}
+      </div>
+
+      {/* ✅ 변경점 2: 기본 marker 제거 + open 상태 회전 */}
+      <style jsx>{`
+        /* 1) 브라우저 기본 summary 화살표(marker) 제거 */
+        .market-details summary {
+          list-style: none;
+        }
+        .market-details summary::-webkit-details-marker {
+          display: none;
+        }
+
+        /* 2) 아이콘 회전(닫힘=▶︎, 열림=▼처럼 보이게) */
+        .market-chevron {
+          display: inline-block;
+          transition: transform 140ms ease;
+        }
+        .market-details[open] .market-chevron {
+          transform: rotate(90deg);
+        }
+      `}</style>
     </div>
   );
 }

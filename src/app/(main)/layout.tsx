@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { supabase } from "@/lib/supabaseClient";
 
@@ -16,15 +16,25 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const router = useRouter();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  const isSettings = pathname?.startsWith('/settings')
-  const isVendors = pathname?.startsWith('/vendors') || pathname === '/'
-  const isReceipts = pathname?.startsWith('/receipts')
+  const isHome = pathname === "/";
+  const isSettings = pathname?.startsWith("/settings");
+  const isVendors = pathname?.startsWith("/vendors");
+  const isReceipts = pathname?.startsWith("/receipts");
 
-  const title =
-    isSettings ? '마이페이지' :
-    isReceipts ? '영수증 내역' :
-    '영수증 신규 등록'
+  // ✅ 타이틀을 경로별로 좀 더 정확히
+  const title = useMemo(() => {
+    if (isSettings) return "마이페이지";
+    if (isReceipts) return "영수증 내역";
+    if (isHome) return "영수증 신규 등록";
 
+    // vendors 영역
+    if (pathname === "/vendors") return "전체 상가 리스트";
+    if (pathname?.startsWith("/vendors/") && pathname?.includes("/receipts/new")) return "영수증 업로드";
+    if (pathname?.startsWith("/vendors/")) return "상가 상세";
+
+    // fallback
+    return "NTP";
+  }, [isSettings, isReceipts, isHome, pathname]);
 
   // ✅ ESC로 닫기 + Drawer 열렸을 때 스크롤 잠금
   useEffect(() => {
@@ -48,7 +58,6 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     setIsDrawerOpen(false);
   }, [pathname]);
 
-
   // ✅ 로그아웃
   const handleLogout = async () => {
     try {
@@ -69,25 +78,21 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       <div className="mx-auto flex min-h-screen max-w-md flex-col bg-white shadow-sm relative">
         {/* 1) 헤더 */}
         <header className="sticky top-0 z-10 flex h-14 items-center justify-center border-b bg-white/90 backdrop-blur px-4">
-          <span className="font-bold text-gray-800 tracking-tight text-lg">
-            {title}
-          </span>
+          <span className="font-bold text-gray-800 tracking-tight text-lg">{title}</span>
         </header>
 
         {/* 2) 콘텐츠 */}
-        <main className="flex-1 p-4 pb-24">{children}</main>
+        <main className="flex-1 p-4 pt-1 pb-24">{children}</main>
 
         {/* 3) Drawer (Overlay & Panel) */}
         {isDrawerOpen && (
           <>
-            {/* Overlay (클릭 시 닫힘) */}
             <button
               className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm"
               aria-label="메뉴 닫기"
               onClick={() => setIsDrawerOpen(false)}
             />
 
-            {/* Drawer Panel */}
             <aside
               className="
                 fixed bottom-0 left-1/2 z-40 w-full max-w-md -translate-x-1/2
@@ -99,21 +104,19 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               aria-modal="true"
               aria-label="전체 메뉴"
             >
-              {/* 손잡이 */}
               <div className="mx-auto my-3 h-1.5 w-12 rounded-full bg-gray-300" />
 
               <div className="px-6 py-4">
                 <h2 className="mb-6 text-lg font-bold text-gray-900">전체 메뉴</h2>
 
                 <nav className="space-y-2">
+                  {/* ✅ 홈은 이제 "/" */}
                   <Link
-                    href="/vendors"
+                    href="/"
                     onClick={() => setIsDrawerOpen(false)}
                     className={cn(
                       "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
-                      isVendors
-                        ? "bg-blue-50 text-blue-600"
-                        : "text-gray-700 hover:bg-gray-100"
+                      isHome ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
                     )}
                   >
                     <span className="text-xl" aria-hidden>
@@ -122,14 +125,27 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     영수증 신규 등록
                   </Link>
 
+                  {/* ✅ vendors는 vendors 성격대로 (전체 상가 리스트) */}
+                  <Link
+                    href="/vendors"
+                    onClick={() => setIsDrawerOpen(false)}
+                    className={cn(
+                      "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
+                      isVendors ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
+                    )}
+                  >
+                    <span className="text-xl" aria-hidden>
+                      🏪
+                    </span>
+                    전체 상가 리스트
+                  </Link>
+
                   <Link
                     href="/receipts"
                     onClick={() => setIsDrawerOpen(false)}
                     className={cn(
                       "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
-                      isReceipts
-                        ? "bg-blue-50 text-blue-600"
-                        : "text-gray-700 hover:bg-gray-100"
+                      isReceipts ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
                     )}
                   >
                     <span className="text-xl" aria-hidden>
@@ -137,14 +153,13 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     </span>
                     영수증 내역
                   </Link>
+
                   <Link
                     href="/settings"
                     onClick={() => setIsDrawerOpen(false)}
                     className={cn(
                       "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
-                      isSettings
-                        ? "bg-blue-50 text-blue-600"
-                        : "text-gray-700 hover:bg-gray-100"
+                      isSettings ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
                     )}
                   >
                     <span className="text-xl" aria-hidden>
@@ -152,12 +167,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     </span>
                     마이페이지
                   </Link>
-
                 </nav>
 
                 <div className="my-6 border-t border-gray-100" />
 
-                {/* 로그아웃 (하단 여백 mb-4 적용) */}
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -173,7 +186,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           </>
         )}
 
-        {/* 4) 하단 네비: 컨테이너 폭에 맞춰 중앙 고정 + safe-area */}
+        {/* 4) 하단 네비 */}
         <nav
           className="
             fixed bottom-0 left-1/2 z-20 w-full max-w-md -translate-x-1/2
@@ -186,10 +199,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             {/* 메뉴 */}
             <button
               type="button"
-              className={cn(
-                "flex flex-col items-center",
-                isDrawerOpen ? "text-blue-600" : "text-gray-500"
-              )}
+              className={cn("flex flex-col items-center", isDrawerOpen ? "text-blue-600" : "text-gray-500")}
               aria-label={isDrawerOpen ? "메뉴 닫기" : "메뉴 열기"}
               onClick={() => setIsDrawerOpen((v) => !v)}
             >
@@ -199,14 +209,11 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               <span className="text-[10px]">메뉴</span>
             </button>
 
-            {/* 홈 */}
+            {/* ✅ 홈 */}
             <Link
-              href="/vendors"
-              className={cn(
-                "flex flex-col items-center",
-                isVendors && !isDrawerOpen ? "text-blue-600" : "text-gray-500"
-              )}
-              aria-current={isVendors ? "page" : undefined}
+              href="/"
+              className={cn("flex flex-col items-center", isHome && !isDrawerOpen ? "text-blue-600" : "text-gray-500")}
+              aria-current={isHome ? "page" : undefined}
             >
               <span className="text-2xl" aria-hidden>
                 🏠
@@ -214,7 +221,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               <span className="text-[10px]">홈</span>
             </Link>
 
-            {/* 내역 */}
+            {/* ✅ 내역 */}
             <Link
               href="/receipts"
               className={cn(
@@ -228,7 +235,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               </span>
               <span className="text-[10px]">내역</span>
             </Link>
-            {/* 마이 */}
+
+            {/* ✅ 마이 */}
             <Link
               href="/settings"
               className={cn(
@@ -242,7 +250,6 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               </span>
               <span className="text-[10px]">마이</span>
             </Link>
-
           </div>
         </nav>
       </div>
