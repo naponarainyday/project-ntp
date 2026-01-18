@@ -79,6 +79,7 @@ export default function ReceiptsNewPage() {
   const [purchaseDate, setPurchaseDate] = useState<string>(todayYYYYMMDD());
   const [receiptType, setReceiptType] = useState<ReceiptType>("standard");
   const [status, setStatus] = useState<ReceiptStatus>("uploaded");
+  const [memo, setMemo] = useState<string>("");
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetSlot, setSheetSlot] = useState<number | null>(null);
@@ -283,6 +284,7 @@ export default function ReceiptsNewPage() {
         status: effectiveStatus,
         image_path: uploadedPaths[0],
         receipt_date: purchaseDate,
+        memo: memo,
       };
 
       const { error: insErr } = await supabase.from("receipts").insert(payload);
@@ -339,7 +341,7 @@ export default function ReceiptsNewPage() {
     const showImage = hasFile && previewUrl;
 
     return (
-      <div style={{ width: "33.3333%", paddingRight: 10, boxSizing: "border-box" }}>
+      <div style={{ width: "33.3333%", boxSizing: "border-box" }}>
         <div
           style={{
             position: "relative",
@@ -400,14 +402,14 @@ export default function ReceiptsNewPage() {
     fontWeight: 800,
     padding: "6px 10px",
     borderRadius: 10,
-    background: "#f2f2f2",
+    background: "#ffffff",
     color: "#3d3d3d",
   };
 
   const stallText = selectedVendor ? formatStallNo(selectedVendor.stall_no) : "";
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 10 }}>
+    <div style={{ maxWidth: 420, margin: "0 auto", padding: 8 }}>
 
       {/* hidden inputs */}
       <input
@@ -426,7 +428,7 @@ export default function ReceiptsNewPage() {
         onChange={(e) => onPickFromCamera(e.target.files)}
       />
 
-      <div style={{ marginTop: 12, display: "grid", gap: 14 }}>
+      <div style={{ marginTop: 9, display: "grid", gap: 14 }}>
         {/* ===== 상가명: 검색 UI(요 UI 그대로) ===== */}
         <div ref={vendorPickerWrapRef} style={{ position: "relative" }}>
           <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 6 }}>상가명</div>
@@ -549,7 +551,7 @@ export default function ReceiptsNewPage() {
         </div>
 
         {/* ===== 아래부터는 [vendorId]/receipts/new UI 그대로 ===== */}
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>구매일</div>
           <input
             type="date"
@@ -559,10 +561,10 @@ export default function ReceiptsNewPage() {
           />
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "start", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>영수증 사진</div>
           <div style={{ width: "100%" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 8 }}>
               <button
                 type="button"
                 onClick={openCameraQuick}
@@ -591,15 +593,15 @@ export default function ReceiptsNewPage() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 800 }}>금액</div>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>금액</div>
           <div style={{ position: "relative" }}>
             <input
               value={amountDisplay}
               onChange={(e) => setAmountDigits(onlyDigits(e.target.value).slice(0, 12))}
               placeholder="예: 45,000"
               inputMode="numeric"
-              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 800 }}
+              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 700 }}
             />
             <div
               style={{
@@ -617,7 +619,7 @@ export default function ReceiptsNewPage() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>지급 구분</div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
@@ -638,7 +640,7 @@ export default function ReceiptsNewPage() {
         </div>
 
         {paymentMethod === "transfer" && (
-          <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
             <div style={{ fontSize: 14, fontWeight: 800 }}>입금일</div>
             <input
               type="date"
@@ -649,7 +651,7 @@ export default function ReceiptsNewPage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>영수증 유형</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button
@@ -669,14 +671,35 @@ export default function ReceiptsNewPage() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "start", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {StatusButton("uploaded", "업로드", { border: "2px solid #e11d48", color: "#e11d48", background: "#fff1f2" })}
-            {StatusButton("completed", "완료", { border: "2px solid #9ca3af", color: "#374151", background: "#f3f4f6" })}
-            {StatusButton("requested", "요청", { border: "2px solid #16a34a", color: "#166534", background: "#ecfdf5" })}
-            {StatusButton("needs_fix", "수정필요", { border: "2px solid #f59e0b", color: "#92400e", background: "#fffbeb" })}
+            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000936", background: "#ffffff" })}
+            {StatusButton("requested", "요청중", { border: "3px solid #16a34a", color: "#166534", background: "#ecfdf5" })}
+            {StatusButton("needs_fix", "수정필요", { border: "3px solid #f59e0b", color: "#92400e", background: "#fffbeb" })}
+            {StatusButton("completed", "완료", { border: "3px solid #9ca3af", color: "#374151", background: "#f3f4f6" })}
+
           </div>
+        </div>
+
+        {/* 메모 입력란 추가 */}
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>메모</div>
+          <textarea
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            placeholder="추가 전달사항이나 메모를 입력하세요."
+            style={{ 
+              width: "100%", 
+              padding: 12, 
+              borderRadius: 12, 
+              border: "1px solid #ddd", 
+              fontSize: 14,
+              minHeight: 80,
+              resize: "none",
+              fontFamily: "inherit"
+            }}
+          />
         </div>
 
         <button

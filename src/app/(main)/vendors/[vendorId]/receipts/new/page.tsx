@@ -68,6 +68,7 @@ export default function NewReceiptPage() {
   const [purchaseDate, setPurchaseDate] = useState<string>(todayYYYYMMDD());
   const [receiptType, setReceiptType] = useState<ReceiptType>("standard");
   const [status, setStatus] = useState<ReceiptStatus>("uploaded");
+  const [memo, setMemo] = useState<string>("");
 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string>("");
@@ -188,53 +189,88 @@ export default function NewReceiptPage() {
     closeSheet();
   }
 
-  async function onSave() {
-    // ... 기존 저장 로직 동일 (중략)
-    setMsg("");
+    async function onSave() {
+
+      setMsg("");
     if (!vendorId) { setMsg("vendorId가 없습니다."); return; }
     if (!purchaseDate) { setMsg("구매일자를 선택해줘."); return; }
     if (selectedCount === 0) { setMsg("영수증 사진을 최소 1장 첨부해줘."); return; }
-    
+
+    const a = Number(amountDigits || "0");
+    if (!Number.isFinite(a) || a <= 0) { setMsg("금액을 올바르게 입력해줘."); return; }
+    if (paymentMethod === "transfer" && !depositDate) { setMsg("입금일을 선택해줘."); return; }
+
     setSaving(true);
+
     try {
-      const { data: authData } = await supabase.auth.getUser();
-      const userId = authData?.user?.id;
-      if (!userId) throw new Error("로그인이 필요합니다.");
+      const { data: sess } = await supabase.auth.getSession();
+      const userId = sess.session?.user?.id; // ✅ 추가
+      if (!userId) {
+        setMsg("로그인이 필요합니다");
+        router.push("/login");
+        return;
+      }
 
       const actualFiles = files.filter((f): f is File => !!f);
       const ts = Date.now();
-      const uploadedPaths: string[] = [];
+      const targetVendorId = vendorId;
 
-      for (let i = 0; i < actualFiles.length; i++) {
-        const f = actualFiles[i];
-        const ext = (f.name.split(".").pop() || "jpg").toLowerCase();
-        const path = `${userId}/${vendorId}/${ts}_${i + 1}.${ext}`;
-        const { error: upErr } = await supabase.storage.from("receipts").upload(path, f, { upsert: false });
-        if (upErr) throw upErr;
-        uploadedPaths.push(path);
+      const uploadedPaths: string[] = [];
+      try {
+        for (let i = 0; i < actualFiles.length; i++) {
+          const f = actualFiles[i];
+          const ext = (f.name.split(".").pop() || "jpg").toLowerCase();
+
+          const key =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+          const path = `${userId}/${targetVendorId}/${ts}_${i + 1}_${key}.${ext}`;
+
+          const { error: upErr } = await supabase.storage
+            .from("receipts")
+            .upload(path, f, { upsert: false });
+
+          if (upErr) throw upErr;
+          uploadedPaths.push(path);
+        }
+      } catch (e) {
+        if (uploadedPaths.length > 0) {
+          await supabase.storage.from("receipts").remove(uploadedPaths);
+        }
+        throw e;
       }
 
       const payload = {
         user_id: userId,
         vendor_id: vendorId,
-        amount: Number(amountDigits || "0"),
+        amount: a,
         payment_method: paymentMethod,
         deposit_date: paymentMethod === "transfer" ? depositDate : null,
         receipt_type: receiptType,
         status: effectiveStatus,
         image_path: uploadedPaths[0],
         receipt_date: purchaseDate,
+        memo,
       };
 
       const { error: insErr } = await supabase.from("receipts").insert(payload);
-      if (insErr) throw insErr;
+
+      if (insErr) {
+        // ✅ DB insert 실패하면 업로드 파일 롤백
+        await supabase.storage.from("receipts").remove(uploadedPaths);
+        throw insErr;
+      }
+
       router.push(`/vendors/${vendorId}`);
     } catch (e: any) {
-      setMsg(e.message ?? "저장 오류");
+      setMsg(e?.message ?? "저장 오류");
     } finally {
       setSaving(false);
     }
   }
+
 
   const pillBase: React.CSSProperties = {
     padding: "10px 12px",
@@ -334,7 +370,7 @@ export default function NewReceiptPage() {
   const stallText = formatStallNo(stallNo);
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 10 }}>
+    <div style={{ maxWidth: 420, margin: "0 auto", padding: 8 }}>
       <input
         ref={filePickerRef}
         type="file"
@@ -352,7 +388,7 @@ export default function NewReceiptPage() {
       />
 
       <div style={{ marginTop: 6, display: "grid", gap: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>상가명</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>
@@ -370,7 +406,7 @@ export default function NewReceiptPage() {
             </div>
             <div style={{ marginLeft: "auto", flexShrink: 0 }}>
               {marketName && (
-                <span style={{ fontSize: 13, fontWeight: 800, padding: "6px 10px", borderRadius: 10, background: "#f2f2f2", color: "#3d3d3d" }}>
+                <span style={{ fontSize: 13, fontWeight: 800, padding: "6px 10px", borderRadius: 10, background: "#ffffff", color: "#3d3d3d" }}>
                   [{marketName}]
                 </span>
               )}
@@ -378,7 +414,7 @@ export default function NewReceiptPage() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>구매일</div>
           <input
             type="date"
@@ -388,7 +424,7 @@ export default function NewReceiptPage() {
           />
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "start", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>영수증 사진</div>
           <div style={{ width: "100%" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 10 }}>
@@ -412,7 +448,7 @@ export default function NewReceiptPage() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>금액</div>
           <div style={{ position: "relative" }}>
             <input
@@ -420,15 +456,15 @@ export default function NewReceiptPage() {
               onChange={(e) => setAmountDigits(onlyDigits(e.target.value).slice(0, 12))}
               placeholder="예: 45,000"
               inputMode="numeric"
-              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 800 }}
+              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 700 }}
             />
-            <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14, opacity: 0.7, fontWeight: 800 }}>
+            <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14, opacity: 0.7, fontWeight: 700 }}>
               원
             </div>
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>지급 구분</div>
           <div style={{ display: "flex", gap: 10 }}>
             <button type="button" onClick={() => setPaymentMethod("cash")} style={{ ...pillBase, background: paymentMethod === "cash" ? "#f2f2f2" : "white" }}>현금</button>
@@ -437,7 +473,7 @@ export default function NewReceiptPage() {
         </div>
 
         {paymentMethod === "transfer" && (
-          <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
             <div style={{ fontSize: 14, fontWeight: 800 }}>입금일</div>
             <input
               type="date"
@@ -448,7 +484,7 @@ export default function NewReceiptPage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>영수증 유형</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button type="button" onClick={() => setReceiptType("standard")} style={{ ...pillBase, background: receiptType === "standard" ? "#f2f2f2" : "white" }}>일반</button>
@@ -456,14 +492,33 @@ export default function NewReceiptPage() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "start", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {StatusButton("uploaded", "업로드", { border: "2px solid #e11d48", color: "#e11d48", background: "#fff1f2" })}
-            {StatusButton("completed", "완료", { border: "2px solid #9ca3af", color: "#374151", background: "#f3f4f6" })}
-            {StatusButton("requested", "요청", { border: "2px solid #16a34a", color: "#166534", background: "#ecfdf5" })}
-            {StatusButton("needs_fix", "수정필요", { border: "2px solid #f59e0b", color: "#92400e", background: "#fffbeb" })}
+            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000936", background: "#ffffff" })}
+            {StatusButton("requested", "요청중", { border: "3px solid #16a34a", color: "#166534", background: "#ecfdf5" })}
+            {StatusButton("needs_fix", "수정필요", { border: "3px solid #f59e0b", color: "#92400e", background: "#fffbeb" })}
+            {StatusButton("completed", "완료", { border: "3px solid #9ca3af", color: "#374151", background: "#f3f4f6" })}
           </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12}}>
+          <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10}}>메모</div>
+          <textarea
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            placeholder="구매내역 등 메모 (ex. 맨스필드 4단)"
+            style={{
+              width: "100%",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontSize: 14,
+              minHeight: 80,
+              resize: "none",
+              fontFamily: "inherit"
+            }}
+          />
         </div>
 
         <button

@@ -28,7 +28,7 @@ function capabilityDot(v: VendorRow) {
 
 function statusLabel(s: VendorRow["status_summary"]) {
   if (s === "needs_fix") return "수정필요";
-  if (s === "requested") return "요청";
+  if (s === "requested") return "요청중";
   if (s === "uploaded") return "업로드";
   if (s === "completed") return "완료";
   return "";
