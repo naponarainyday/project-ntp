@@ -82,12 +82,12 @@ function formatListDate(r: Row) {
   return `${yy}.${mm}.${dd}`;
 }
 
-type PeriodKey = "3m" | "this_month" | "last_month" | "custom";
+type PeriodKey = "today" | "this_month" | "last_month" | "custom";
 
 function periodLabel(p: PeriodKey) {
   switch (p) {
-    case "3m":
-      return "3개월";
+    case "today":
+      return "오늘";
     case "this_month":
       return "이번달";
     case "last_month":
@@ -95,12 +95,14 @@ function periodLabel(p: PeriodKey) {
     case "custom":
       return "직접설정";
     default:
-      return "3개월";
+      return "이번달";
   }
 }
 
 function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
   const now = new Date();
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+  const endOfDay = (d:Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
   const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
   const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 
@@ -119,9 +121,7 @@ function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
     return { from: startOfMonth(last), to: endOfMonth(last) };
   }
 
-  const from = new Date(now);
-  from.setMonth(from.getMonth() - 3);
-  return { from, to: null };
+  return { from: startOfDay(now), to: endOfDay(now)};
 }
 
 function statusButtonStyle(s: ReceiptStatus) {
@@ -148,7 +148,7 @@ export default function ReceiptsPage() {
 
   // filter drawer state
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [period, setPeriod] = useState<PeriodKey>("3m");
+  const [period, setPeriod] = useState<PeriodKey>("this_month");
   const [customFrom, setCustomFrom] = useState<string>("");
   const [customTo, setCustomTo] = useState<string>("");
 
@@ -542,7 +542,7 @@ export default function ReceiptsPage() {
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                {(["3m", "this_month", "last_month", "custom"] as PeriodKey[]).map((p) => {
+                {(["today", "this_month", "last_month", "custom"] as PeriodKey[]).map((p) => {
                   const active = period === p;
                   return (
                     <button
@@ -641,7 +641,7 @@ export default function ReceiptsPage() {
 
                 <button
                   onClick={() => {
-                    setPeriod("3m");
+                    setPeriod("this_month");
                     setCustomFrom("");
                     setCustomTo("");
                     setStatusFilter(new Set());
