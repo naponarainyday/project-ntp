@@ -7,7 +7,7 @@ import { ChevronDown } from "lucide-react";
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer";
-type PeriodKey = "3m" | "this_month" | "last_month" | "custom";
+type PeriodKey = "today" | "this_month" | "last_month" | "custom";
 
 type VendorInfo = {
   id: string;
@@ -110,8 +110,8 @@ function lockBodyScroll(lock: boolean) {
 
 function periodLabel(p: PeriodKey) {
   switch (p) {
-    case "3m":
-      return "3개월";
+    case "today":
+      return "오늘";
     case "this_month":
       return "이번달";
     case "last_month":
@@ -119,12 +119,14 @@ function periodLabel(p: PeriodKey) {
     case "custom":
       return "직접설정";
     default:
-      return "3개월";
+      return "이번달";
   }
 }
 
 function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
   const now = new Date();
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+  const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
   const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
   const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 
@@ -138,9 +140,8 @@ function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
     const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return { from: startOfMonth(last), to: endOfMonth(last) };
   }
-  const from = new Date(now);
-  from.setMonth(from.getMonth() - 3);
-  return { from, to: null };
+
+  return { from: startOfDay(now), to: endOfDay(now) };
 }
 
 export default function VendorReceiptsPage() {
@@ -156,7 +157,7 @@ export default function VendorReceiptsPage() {
 
   // filter drawer
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [period, setPeriod] = useState<PeriodKey>("3m");
+  const [period, setPeriod] = useState<PeriodKey>("this_month");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<Set<ReceiptStatus>>(new Set());
@@ -680,7 +681,7 @@ export default function VendorReceiptsPage() {
             <div style={{ marginTop: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9, marginBottom: 8 }}>조회기간</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                {(["3m", "this_month", "last_month", "custom"] as PeriodKey[]).map((p) => {
+                {(["today", "this_month", "last_month", "custom"] as PeriodKey[]).map((p) => {
                   const active = period === p;
                   return (
                     <button
@@ -769,7 +770,7 @@ export default function VendorReceiptsPage() {
 
                 <button
                   onClick={() => {
-                    setPeriod("3m");
+                    setPeriod("this_month");
                     setCustomFrom("");
                     setCustomTo("");
                     setStatusFilter(new Set());
