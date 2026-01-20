@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { ChevronDown } from "lucide-react"; // ✅ (4) chevron 아이콘
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
-type PaymentMethod = "cash" | "transfer";
+type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptType = "standard" | "simple" | null;
 
 type Market = { id: string; name: string | null; sort_order: number | null };
@@ -22,6 +22,7 @@ type Row = {
   receipt_type: ReceiptType;
   created_at: string;
   receipt_date?: string | null; // ✅ 새로 사용 (없으면 created_at fallback)
+  memo?: string | null;
   vendors?: Vendor[] | Vendor | null;
 };
 
@@ -49,7 +50,9 @@ function statusLabel(s: ReceiptStatus) {
 }
 
 function paymentLabel(pm: PaymentMethod) {
-  return pm === "transfer" ? "입금" : "현금";
+  if (pm === "transfer") return "입금";
+  if (pm === "payable") return "미수";
+  return "현금";
 }
 
 // join 결과(배열)에서 vendor/market을 안전하게 꺼내는 헬퍼
@@ -154,6 +157,9 @@ export default function ReceiptsPage() {
 
   // status filter (empty => all)
   const [statusFilter, setStatusFilter] = useState<Set<ReceiptStatus>>(new Set());
+  
+  // payment method filter (empty=> all)
+  const [paymentFilter, setPaymentFilter] = useState<Set<PaymentMethod>>(new Set());
 
   // selection + bulk status drawer
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -185,7 +191,7 @@ export default function ReceiptsPage() {
           .from("receipts")
           .select(
             `
-              id, vendor_id, amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date,
+              id, vendor_id, amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
               vendors:vendors!receipts_vendor_id_fkey (
                 id, name, stall_no,
                 markets:markets!vendors_market_id_fkey (id, name, sort_order)
@@ -231,6 +237,10 @@ export default function ReceiptsPage() {
       list = list.filter((r) => statusFilter.has(r.status));
     }
 
+    if (paymentFilter.size > 0) {
+      list = list.filter((r) => paymentFilter.has(r.payment_method));
+    }
+
     const q = vendorQuery.trim().toLowerCase();
     if (q) {
       list = list.filter((r) => {
@@ -242,15 +252,27 @@ export default function ReceiptsPage() {
 
     list.sort((a, b) => parseDateKey(b) - parseDateKey(a));
     return list;
-  }, [rows, vendorQuery, period, customFrom, customTo, statusFilter]);
+  }, [rows, vendorQuery, period, customFrom, customTo, statusFilter, paymentFilter]);
 
-  const filterButtonText = useMemo(() => {
-    const p = periodLabel(period);
-    const s =
-      statusFilter.size === 0 ? "전체" : Array.from(statusFilter).map((x) => statusLabel(x)).join(",");
-    return `${p}, ${s}`;
-  }, [period, statusFilter]);
+  // 필터 버튼에 보여줄 텍스트들 (3줄용)
 
+  const periodText = useMemo(() => {
+    return periodLabel(period);
+  }, [period]);
+
+  const statusText = useMemo(() => {
+    return statusFilter.size === 0
+      ? "전체"
+      : Array.from(statusFilter).map((x) => statusLabel(x)).join(", ");
+  }, [statusFilter]);
+
+  const paymentText = useMemo(() => {
+    return paymentFilter.size === 0
+      ? "전체"
+      : Array.from(paymentFilter).map((x) => paymentLabel(x)).join(", ");
+  }, [paymentFilter]);
+
+  
   const toggleStatusFilter = (s: ReceiptStatus) => {
     setStatusFilter((prev) => {
       const next = new Set(prev);
@@ -260,6 +282,15 @@ export default function ReceiptsPage() {
     });
   };
 
+  const togglePaymentFilter = (pm: PaymentMethod) => {
+    setPaymentFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(pm)) next.delete(pm);
+      else next.add(pm);
+      return next;
+    });
+  };
+  
   const clearSelection = () => {
     setSelectedIds(new Set());
     setPendingStatus(null);
@@ -336,7 +367,7 @@ export default function ReceiptsPage() {
             gap: 8,
             border: "1px solid #D1D5DB",
             borderRadius: 14,
-            padding: "10px 12px",
+            padding: "12px 12px",
             background: "#fff",
           }}
         >
@@ -362,23 +393,32 @@ export default function ReceiptsPage() {
             setIsFilterOpen(true);
           }}
           style={{
-            border: "none",
-            background: "transparent",
-            fontSize: 13,
-            padding: "8px 6px",
+            border: "1px solid #ffffff",
+            background: "#fff",
+            borderRadius: 8,
+            padding: "4px 6px",
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 4,
             cursor: "pointer",
-            opacity: 1,
             whiteSpace: "nowrap",
           }}
           aria-label="필터"
-        >
-          <span>{filterButtonText}</span>
-          {/* ✅ (4) ▼ -> ChevronDown */}
-          <ChevronDown size={16} style={{ opacity: 0.9 }} />
-        </button>
+          >
+          <div style={{ display: "grid", gap: 0, textAlign: "left" }}>
+            <div style={{ fontSize: 12}}>
+              기간: <span style={{ opacity: 0.8, fontWeight: 700 }}>{periodText}</span>
+            </div>
+            <div style={{ fontSize: 12}}>
+              상태: <span style={{ opacity: 0.8, fontWeight: 700 }}>{statusText}</span>
+            </div>
+            <div style={{ fontSize: 12}}>
+              지급: <span style={{ opacity: 0.8, fontWeight: 700 }}>{paymentText}</span>
+            </div>
+          </div>
+
+          <ChevronDown size={20} style={{ marginLeft: 1 }} />
+          </button>
       </div>
 
       {msg ? (
@@ -411,7 +451,7 @@ export default function ReceiptsPage() {
                   display: "flex",
                   alignItems: "center", // ✅ (1) 행 전체를 세로 가운데로
                   gap: 7,
-                  padding: "7px 1px",
+                  padding: "2px 1px",
                   background: isCompleted ? "#D9D9D9" : "#FFFFFF",
                   borderBottom: "1px solid #CDCDCD",
                 }}
@@ -430,7 +470,7 @@ export default function ReceiptsPage() {
 
                 {/* main content (clickable) */}
                 <div
-                  onClick={() => router.push(`/vendors/${r.vendor_id}`)}
+                  onClick={() => router.push(`/receipts/${r.id}`)}
                   style={{
                     flex: 1,
                     cursor: "pointer",
@@ -594,7 +634,7 @@ export default function ReceiptsPage() {
             {/* status filter */}
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9, marginBottom: 8 }}>
-                상태 <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.65 }}>(미선택=전체)</span>
+                처리상태 <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.65 }}>(미선택=전체)</span>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
@@ -621,33 +661,50 @@ export default function ReceiptsPage() {
                   );
                 })}
               </div>
+            </div>
 
-              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button
-                  onClick={() => setStatusFilter(new Set())}
-                  style={{
-                    flex: 1,
-                    padding: 10,
-                    borderRadius: 12,
-                    border: "1px solid #E5E7EB",
-                    background: "#F9FAFB",
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 700,
-                  }}
-                >
-                  상태 전체
-                </button>
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9, marginBottom: 8 }}>
+                지급구분 <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.65 }}>(미선택=전체)</span>
+              </div>
 
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                {(["cash", "transfer", "payable"] as PaymentMethod[]).map((pm) => {
+                  const active = paymentFilter.has(pm);
+
+                  return (
+                    <button
+                      key={pm}
+                      onClick={() => togglePaymentFilter(pm)}
+                      style={{
+                        padding: "10px 8px",
+                        borderRadius: 10,
+                        border: `2px solid ${active ? "#111827" : "#E5E7EB"}`,
+                        background: "#FFFFFF",
+                        color: "#111827",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontWeight: active ? 900 : 700,
+                      }}
+                    >
+                      {paymentLabel(pm)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+              <div style={{ marginTop: 4, paddingTop: 12}}>  
                 <button
                   onClick={() => {
                     setPeriod("this_month");
                     setCustomFrom("");
                     setCustomTo("");
                     setStatusFilter(new Set());
+                    setPaymentFilter(new Set());
                   }}
                   style={{
-                    flex: 1,
+                    width: "100%",
                     padding: 10,
                     borderRadius: 12,
                     border: "1px solid #E5E7EB",
@@ -659,8 +716,7 @@ export default function ReceiptsPage() {
                 >
                   초기화
                 </button>
-              </div>
-            </div>
+            </div>        
           </div>
         </>
       ) : null}
