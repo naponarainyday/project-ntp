@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { ChevronDown } from "lucide-react";
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
-type PaymentMethod = "cash" | "transfer";
+type PaymentMethod = "cash" | "transfer" | "payable";
 type PeriodKey = "today" | "this_month" | "last_month" | "custom";
 
 type VendorInfo = {
@@ -28,6 +28,12 @@ type ReceiptRow = {
   created_at: string;
   image_path: string | null;
   memo?: string | null;
+  receipt_images?: ReceiptImageLite[] | null;
+};
+
+type ReceiptImageLite = {
+  path: string;
+  sort_order: number; // 1~3
 };
 
 const STATUS_ORDER: ReceiptStatus[] = ["needs_fix", "requested", "uploaded", "completed"];
@@ -48,7 +54,9 @@ function statusLabel(s: ReceiptStatus) {
 }
 
 function paymentLabel(pm: PaymentMethod) {
-  return pm === "transfer" ? "입금" : "현금";
+  if (pm==="transfer") return "입금";
+  if (pm==="payable") return "미수";
+  return "현금";
 }
 
 function formatMoney(n: number) {
@@ -161,10 +169,18 @@ export default function VendorReceiptsPage() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<Set<ReceiptStatus>>(new Set());
+  const [paymentFilter, setPaymentFilter] = useState<Set<PaymentMethod>>(new Set());
 
   // expand row
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [imgUrlById, setImgUrlById] = useState<Record<string, string>>({});
+  // 변경: 3장 배열로 저장
+  const [imgUrlsById, setImgUrlsById] = useState<Record<string, Array<string | null>>>({});
+
+  // 라이트박스(크게 보기)
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerUrls, setViewerUrls] = useState<Array<string>>([]);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
 
   // selection + bulk
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -202,7 +218,10 @@ export default function VendorReceiptsPage() {
 
         const { data: r, error: rErr } = await supabase
           .from("receipts")
-          .select("id, vendor_id, amount, status, payment_method, deposit_date, receipt_date, created_at, image_path, memo")
+          .select(`
+            id, vendor_id, amount, status, payment_method, deposit_date, receipt_date, created_at, image_path, memo,
+            receipt_images(path, sort_order)
+          `)
           .eq("vendor_id", vendorId)
           .order("created_at", { ascending: false });
 
@@ -222,16 +241,20 @@ export default function VendorReceiptsPage() {
     return () => lockBodyScroll(false);
   }, [isFilterOpen]);
 
-  const filterButtonText = useMemo(() => {
-    const p = periodLabel(period);
-    const s =
-      statusFilter.size === 0
-        ? "전체"
-        : Array.from(statusFilter)
-            .map((x) => statusLabel(x))
-            .join(",");
-    return `${p}, ${s}`;
-  }, [period, statusFilter]);
+  const periodText = useMemo(() => periodLabel(period), [period]);
+
+  const statusText = useMemo(() => {
+    return statusFilter.size === 0
+      ? "전체"
+      : Array.from(statusFilter).map((x) => statusLabel(x)).join(", ");
+  }, [statusFilter]);
+
+  const paymentText = useMemo(() => {
+    return paymentFilter.size === 0
+      ? "전체"
+      : Array.from(paymentFilter).map((x) => paymentLabel(x)).join(", ");
+  }, [paymentFilter]);
+
 
   const toggleStatusFilter = (s: ReceiptStatus) => {
     setStatusFilter((prev) => {
@@ -241,6 +264,16 @@ export default function VendorReceiptsPage() {
       return next;
     });
   };
+
+  const togglePaymentFilter = (pm: PaymentMethod) => {
+    setPaymentFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(pm)) next.delete(pm);
+      else next.add(pm);
+      return next;
+    });
+  };
+
 
   const filtered = useMemo(() => {
     let list = rows.slice();
@@ -258,10 +291,11 @@ export default function VendorReceiptsPage() {
     }
 
     if (statusFilter.size > 0) list = list.filter((r) => statusFilter.has(r.status));
+    if (paymentFilter.size > 0) list = list.filter((r) => paymentFilter.has(r.payment_method));
 
     list.sort((a, b) => parseDateKey(b) - parseDateKey(a));
     return list;
-  }, [rows, period, customFrom, customTo, statusFilter]);
+  }, [rows, period, customFrom, customTo, statusFilter, paymentFilter]);
 
   const grouped = useMemo(() => {
     const map = new Map<ReceiptStatus, ReceiptRow[]>();
@@ -335,15 +369,32 @@ export default function VendorReceiptsPage() {
     }
   };
 
-  const ensureSignedUrl = async (row: ReceiptRow) => {
-    if (!row.image_path) return;
-    if (imgUrlById[row.id]) return;
+  const ensureSignedUrls = async (row: ReceiptRow) => {
+  if (imgUrlsById[row.id]) return;
 
-    const { data, error } = await supabase.storage.from("receipts").createSignedUrl(row.image_path, 60 * 30);
-    if (!error && data?.signedUrl) {
-      setImgUrlById((prev) => ({ ...prev, [row.id]: data.signedUrl }));
-    }
-  };
+  // receipt_images 우선, 없으면 image_path를 1번 슬롯으로 fallback
+  const paths3: Array<string | null> = [null, null, null];
+
+  const imgs = (row.receipt_images ?? []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  for (const it of imgs) {
+    const so = Number(it.sort_order);
+    if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
+  }
+
+  if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+
+  const signed = await Promise.all(
+    paths3.map(async (p) => {
+      if (!p) return null;
+      const { data, error } = await supabase.storage.from("receipts").createSignedUrl(p, 60 * 30);
+      if (error) return null;
+      return data?.signedUrl ?? null;
+    })
+  );
+
+  setImgUrlsById((prev) => ({ ...prev, [row.id]: signed }));
+};
+
 
   const toggleExpand = async (row: ReceiptRow) => {
     setExpandedIds((prev) => {
@@ -352,7 +403,7 @@ export default function VendorReceiptsPage() {
       else next.add(row.id);
       return next;
     });
-    await ensureSignedUrl(row);
+    await ensureSignedUrls(row);
   };
 
   // ✅ 홈과 같은 헤더 구성요소 (각각 스타일 따로)
@@ -368,7 +419,7 @@ export default function VendorReceiptsPage() {
           display: "flex",
           alignItems: "center",
           gap: 10,
-          padding: "8px 2px 10px",
+          padding: "2px 2px 2px",
           borderBottom: "1px solid #adadad",
         }}
       >
@@ -428,21 +479,32 @@ export default function VendorReceiptsPage() {
             setIsFilterOpen(true);
           }}
           style={{
-            border: "none",
-            background: "transparent",
-            fontSize: 13,
-            padding: "7px 6px",
+            border: "1px solid #ffffff",
+            background: "#fff",
+            borderRadius: 8,
+            padding: "4px 6px",
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 4,
             cursor: "pointer",
             whiteSpace: "nowrap",
           }}
           aria-label="필터"
-        >
-          <span>{filterButtonText}</span>
-          <ChevronDown size={16} style={{ opacity: 0.9 }} />
-        </button>
+          >
+          <div style={{ display: "grid", gap: 0, textAlign: "left" }}>
+            <div style={{ fontSize: 12}}>
+              기간: <span style={{ opacity: 0.8, fontWeight: 700 }}>{periodText}</span>
+            </div>
+            <div style={{ fontSize: 12}}>
+              상태: <span style={{ opacity: 0.8, fontWeight: 700 }}>{statusText}</span>
+            </div>
+            <div style={{ fontSize: 12}}>
+              지급: <span style={{ opacity: 0.8, fontWeight: 700 }}>{paymentText}</span>
+            </div>
+          </div>
+
+          <ChevronDown size={20} style={{ marginLeft: 1 }} />
+          </button>
       </div>
 
       {msg ? <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9, whiteSpace: "pre-wrap" }}>{msg}</div> : null}
@@ -565,73 +627,118 @@ export default function VendorReceiptsPage() {
                         {/* ✅ expanded: 2열 레이아웃 (이미지 | memo + 상세보기) */}
                         {isExpanded ? (
                           <div style={{ marginTop: 10, paddingLeft: 26 }}>
+                            {/* 1) 이미지 3장 1행 */}
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                              {imgUrlsById[r.id] ? (
+                                imgUrlsById[r.id].map((u, idx) => (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const all = imgUrlsById[r.id] ?? [];
+                                      const valid = all.filter((x): x is string => !!x);
+                                      if (valid.length === 0) return;
+
+                                      // ✅ 클릭한 썸네일이 valid에서 몇번째인지 계산(중간 null 제거했으니까)
+                                      const clickedUrl = u ?? null;
+                                      const startIdx = clickedUrl ? Math.max(0, valid.indexOf(clickedUrl)) : 0;
+
+                                      setViewerUrls(valid);
+                                      setViewerIndex(startIdx);
+                                      setViewerOpen(true);
+                                    }}
+                                    style={{
+                                      border: "1px solid #eee",
+                                      background: "#fff",
+                                      borderRadius: 10,
+                                      padding: 0,
+                                      overflow: "hidden",
+                                      cursor: u ? "pointer" : "default",
+                                      opacity: u ? 1 : 0.35,
+                                      aspectRatio: "1 / 1",
+                                    }}
+                                    disabled={!u}
+                                    aria-label={`영수증 이미지 ${idx + 1} 크게보기`}
+                                  >
+                                    {u ? (
+                                      <img
+                                        src={u}
+                                        alt={`영수증 ${idx + 1}`}
+                                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                                      />
+                                    ) : (
+                                      <div
+                                        style={{
+                                          width: "100%",
+                                          height: "100%",
+                                          display: "grid",
+                                          placeItems: "center",
+                                          fontSize: 12,
+                                          opacity: 0.7,
+                                        }}
+                                      >
+                                        없음
+                                      </div>
+                                    )}
+                                  </button>
+                                ))
+                              ) : (
+                                <div style={{ gridColumn: "1 / -1", fontSize: 12, opacity: 0.7 }}>이미지 불러오는 중…</div>
+                              )}
+                            </div>
+
+                            {/* 2) 구분선 */}
+                            <div style={{ marginTop: 10, borderTop: "1px solid #E5E7EB" }} />
+
+                            {/* 3) 메모 | 자세히 보기 2열 */}
                             <div
                               style={{
+                                marginTop: 10,
                                 display: "grid",
-                                gridTemplateColumns: "1.2fr 1fr",
+                                gridTemplateColumns: "1fr 120px",
                                 gap: 10,
                                 alignItems: "start",
                               }}
                             >
-                              {/* image */}
-                              <div>
-                                {imgUrlById[r.id] ? (
-                                  <img
-                                    src={imgUrlById[r.id]}
-                                    alt="영수증"
-                                    style={{
-                                      width: "100%",
-                                      maxHeight: 260,
-                                      objectFit: "contain",
-                                      borderRadius: 12,
-                                      border: "1px solid #eee",
-                                      background: "#fff",
-                                      display: "block",
-                                    }}
-                                  />
-                                ) : (
-                                  <div style={{ fontSize: 12, opacity: 0.7 }}>이미지 불러오는 중…</div>
-                                )}
+                              {/* memo */}
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: "#374151",
+                                  whiteSpace: "pre-wrap",
+                                  wordBreak: "break-word",
+                                  minHeight: 44,
+                                }}
+                              >
+                                {(r.memo ?? "").trim() ? (r.memo ?? "").trim() : <span style={{ opacity: 0.55 }}>메모 없음</span>}
                               </div>
 
-                              {/* memo + detail */}
-                              <div style={{ minWidth: 0 }}>
-                                <div
-                                  style={{
-                                    fontSize: 12,
-                                    color: "#374151",
-                                    whiteSpace: "pre-wrap",
-                                    wordBreak: "break-word",
-                                    minHeight: 80,
-                                  }}
-                                >
-                                  {(r.memo ?? "").trim() ? (r.memo ?? "").trim() : <span style={{ opacity: 0.55 }}>메모 없음</span>}
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    router.push(`/receipts/new?id=${r.id}`);
-                                  }}
-                                  style={{
-                                    marginTop: 10,
-                                    width: "100%",
-                                    border: "1px solid #E5E7EB",
-                                    background: "#FFFFFF",
-                                    borderRadius: 12,
-                                    padding: "10px 12px",
-                                    fontSize: 13,
-                                    fontWeight: 800,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  자세히 보기
-                                </button>
-                              </div>
+                              {/* detail button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  router.push(`/receipts/${r.id}`);
+                                }}
+                                style={{
+                                  width: "100%",
+                                  border: "1px solid #E5E7EB",
+                                  background: "#FFFFFF",
+                                  borderRadius: 12,
+                                  padding: "10px 10px",
+                                  fontSize: 13,
+                                  fontWeight: 800,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                자세히 보기
+                              </button>
                             </div>
                           </div>
                         ) : null}
+
                       </li>
                     );
                   })}
@@ -868,6 +975,135 @@ export default function VendorReceiptsPage() {
           </div>
         </div>
       ) : null}
+
+{viewerOpen ? (
+  <>
+    {/* dim */}
+    <div
+      onClick={() => setViewerOpen(false)}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        zIndex: 999,
+      }}
+    />
+
+    {/* modal */}
+    <div
+      onClick={() => setViewerOpen(false)}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 420,
+          borderRadius: 16,
+          overflow: "hidden",
+          background: "#111",
+          border: "1px solid rgba(255,255,255,0.12)",
+        }}
+      >
+        {/* header */}
+        <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", color: "#fff" }}>
+          <div style={{ fontSize: 13, fontWeight: 900 }}>영수증 이미지</div>
+          <div style={{ marginLeft: 10, fontSize: 12, opacity: 0.75 }}>
+            {viewerIndex + 1} / {viewerUrls.filter(Boolean).length || 1}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setViewerOpen(false)}
+            style={{
+              marginLeft: "auto",
+              border: "none",
+              background: "transparent",
+              color: "#fff",
+              fontSize: 18,
+              cursor: "pointer",
+              fontWeight: 900,
+            }}
+            aria-label="닫기"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* big image */}
+        <div style={{ background: "#000" }}>
+          {viewerUrls[viewerIndex] ? (
+            <img
+              src={viewerUrls[viewerIndex] as string}
+              alt={`영수증 크게보기 ${viewerIndex + 1}`}
+              style={{
+                width: "100%",
+                maxHeight: "75vh",
+                objectFit: "contain",
+                display: "block",
+              }}
+            />
+          ) : (
+            <div style={{ color: "#fff", padding: 24, fontSize: 13, opacity: 0.8 }}>
+              이미지가 없습니다.
+            </div>
+          )}
+        </div>
+
+        {/* thumbs */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: 8,
+            padding: 10,
+            background: "#0b0b0b",
+          }}
+        >
+          {viewerUrls.map((u, idx) => (
+            <button
+              key={idx}
+              type="button"
+              disabled={!u}
+              onClick={() => setViewerIndex(idx)}
+              style={{
+                borderRadius: 12,
+                border: idx === viewerIndex ? "2px solid rgba(255,255,255,0.9)" : "1px solid rgba(255,255,255,0.18)",
+                background: "transparent",
+                padding: 0,
+                overflow: "hidden",
+                aspectRatio: "1 / 1",
+                cursor: u ? "pointer" : "not-allowed",
+                opacity: u ? 1 : 0.25,
+              }}
+              aria-label={`썸네일 ${idx + 1}`}
+              title={u ? "이 이미지로 보기" : ""}
+            >
+              {u ? (
+                <img
+                  src={u}
+                  alt={`thumb ${idx + 1}`}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+              ) : (
+                <div style={{ width: "100%", height: "100%" }} />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  </>
+) : null}
+
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type PaymentMethod = "cash" | "transfer";
+type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type ReceiptType = "standard" | "simple";
 
@@ -469,6 +469,7 @@ export default function NewReceiptPage() {
           <div style={{ display: "flex", gap: 10 }}>
             <button type="button" onClick={() => setPaymentMethod("cash")} style={{ ...pillBase, background: paymentMethod === "cash" ? "#f2f2f2" : "white" }}>현금</button>
             <button type="button" onClick={() => setPaymentMethod("transfer")} style={{ ...pillBase, background: paymentMethod === "transfer" ? "#f2f2f2" : "white" }}>입금</button>
+            <button type="button" onClick={() => setPaymentMethod("payable")} style={{ ...pillBase, background: paymentMethod === "payable" ? "#f2f2f2" : "white" }}>미수</button>
           </div>
         </div>
 

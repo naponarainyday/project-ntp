@@ -64,9 +64,9 @@ export default function MainHomePage() {
         .select("*")
         .order("status_priority", { ascending: true })
         .order("market_sort_order", { ascending: true, nullsFirst: false })
+        .order("name", { ascending: true })
         .order("stall_no_num", { ascending: true, nullsFirst: false })
-        .order("stall_no", { ascending: true, nullsFirst: false })
-        .order("name", { ascending: true });
+        .order("stall_no", { ascending: true, nullsFirst: false });
 
       if (vendorError) {
         console.error(vendorError);
@@ -159,7 +159,7 @@ export default function MainHomePage() {
             return (
               <li key={vid} style={{ borderBottom: "1px solid #f0f0f0" }}>
                 <Link
-                  href={`/vendors/${vid}/receipts/new`}
+                  href={`/vendors/${vid}`}
                   style={{
                     display: "flex",
                     alignItems: "center",

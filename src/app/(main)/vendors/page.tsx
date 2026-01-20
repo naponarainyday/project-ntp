@@ -82,11 +82,11 @@ export default function VendorsPage() {
       const { data, error } = await supabase
         .from("v_vendor_list_page2")
         .select("*")
-        .order("status_priority", { ascending: true })
+        // .order("status_priority", { ascending: true })
         .order("market_sort_order", { ascending: true, nullsFirst: false })
+        .order("name", { ascending: true })
         .order("stall_no_num", { ascending: true, nullsFirst: false })
-        .order("stall_no", { ascending: true, nullsFirst: false })
-        .order("name", { ascending: true });
+        .order("stall_no", { ascending: true, nullsFirst: false });
 
       if (error) {
         console.error(error);
@@ -108,8 +108,17 @@ export default function VendorsPage() {
 
   // 🔴 supported 상가만 상단 섹션으로 분리
   const supportedVendors = useMemo(() => {
-    return filtered.filter((v) => v.invoice_capability === "supported");
-  }, [filtered]);
+    return filtered.filter((v) => v.invoice_capability === "supported")
+    .slice() // 원본 배열 복사
+    .sort((a, b) =>{
+      // 1. status_priority 기준으로 먼저 정렬 (영수증 업로드 등 우선 순위)
+      if (a.status_priority !==b.status_priority) {
+        return a.status_priority - b.status_priority;
+        }
+        // 2. 우선순위가 같은면 이름순(가나다)
+        return a.name.localeCompare(b.name,'ko')      
+  });
+ }, [filtered]);
 
   // 시장별 그룹 (드랍다운)
   const groupedByMarket = useMemo(() => {
