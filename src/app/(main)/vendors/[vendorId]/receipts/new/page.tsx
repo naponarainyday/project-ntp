@@ -44,8 +44,8 @@ function capabilityDot(invoice_capability: InvoiceCapability) {
 
 export default function NewReceiptPage() {
   const router = useRouter();
-  const params = useParams<{ vendorId: string }>();
-  const vendorId = params.vendorId;
+  const params = useParams<{ vendorId: string | string[] }>();
+  const vendorId = Array.isArray(params.vendorId) ? params.vendorId[0] : params.vendorId;
 
   const filePickerRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
@@ -263,7 +263,7 @@ export default function NewReceiptPage() {
         throw insErr;
       }
 
-      router.push(`/vendors/${vendorId}`);
+      router.replace(`/vendors/${vendorId}`);
     } catch (e: any) {
       setMsg(e?.message ?? "저장 오류");
     } finally {
@@ -496,10 +496,10 @@ export default function NewReceiptPage() {
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000936", background: "#ffffff" })}
-            {StatusButton("requested", "요청중", { border: "3px solid #16a34a", color: "#166534", background: "#ecfdf5" })}
-            {StatusButton("needs_fix", "수정필요", { border: "3px solid #f59e0b", color: "#92400e", background: "#fffbeb" })}
-            {StatusButton("completed", "완료", { border: "3px solid #9ca3af", color: "#374151", background: "#f3f4f6" })}
+            {StatusButton("uploaded", "업로드", { border: "3px solid #000936", color: "#000936", background: "#ffffff" })}
+            {StatusButton("requested", "요청중", { border: "3px solid #16A34A", color: "#001709", background: "#c9ffcf" })}
+            {StatusButton("needs_fix", "수정필요", { border: "3px solid #ff3300", color: "#351400", background: "#fff2f2" })}
+            {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#050608", background: "#eae9e9" })}
           </div>
         </div>
 

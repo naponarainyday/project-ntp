@@ -256,7 +256,7 @@ export default function ReceiptDetailPage() {
   };
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 8 }}>
+    <div style={{ margin: "0 auto" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
         <button

@@ -129,9 +129,9 @@ function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
 
 function statusButtonStyle(s: ReceiptStatus) {
   if (s === "uploaded") return { border: "#000936", bg: "#FFFFFF", text: "#000000" };
-  if (s === "requested") return { border: "#16A34A", bg: "#FFFFFF", text: "#01240E" };
-  if (s === "needs_fix") return { border: "#F59E0B", bg: "#FFFFFF", text: "#92400E" };
-  return { border: "#9CA3AF", bg: "#F3F3F3", text: "#374151" };
+  if (s === "requested") return { border: "#16A34A", bg: "#c9ffcf", text: "#001709" };
+  if (s === "needs_fix") return { border: "#ff3300", bg: "#fff2f2", text: "#351400" };
+  return { border: "#9CA3AF", bg: "#eae9e9", text: "#050608" };
 }
 
 function lockBodyScroll(lock: boolean) {
@@ -163,11 +163,6 @@ export default function ReceiptsPage() {
 
   // selection + bulk status drawer
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const selectedStatus = useMemo<ReceiptStatus | null>(() => {
-    if (selectedIds.size === 0) return null;
-    const first = rows.find((r) => selectedIds.has(r.id));
-    return first?.status ?? null;
-  }, [selectedIds, rows]);
 
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<ReceiptStatus | null>(null);
@@ -254,6 +249,31 @@ export default function ReceiptsPage() {
     return list;
   }, [rows, vendorQuery, period, customFrom, customTo, statusFilter, paymentFilter]);
 
+  const allFilteredIds = useMemo(() => filtered.map((r) => r.id), [filtered]);
+
+  const allChecked = useMemo(() => {
+    if (allFilteredIds.length === 0) return false;
+    return allFilteredIds.every((id) => selectedIds.has(id));
+  }, [allFilteredIds, selectedIds]);
+
+  const toggleSelectAllFiltered = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allChecked) {
+        // 현재 필터된 애들만 해제
+        allFilteredIds.forEach((id) => next.delete(id));
+      } else {
+        // 현재 필터된 애들만 선택
+        allFilteredIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const filteredTotal = useMemo(() => {
+    return filtered.reduce((sum,r) => sum + Number(r.amount || 0), 0);
+  }, [filtered]);
+
   // 필터 버튼에 보여줄 텍스트들 (3줄용)
 
   const periodText = useMemo(() => {
@@ -307,35 +327,37 @@ export default function ReceiptsPage() {
         return next;
       }
 
-      if (next.size > 0) {
-        const firstId = Array.from(next)[0];
-        const first = rows.find((x) => x.id === firstId);
-        if (first && first.status !== r.status) {
-          setMsg("같은 상태의 건만 함께 선택할 수 있어요.");
-          return next;
-        }
-      }
-
       next.add(r.id);
       return next;
     });
   };
 
-  const canShowBulkDrawer = useMemo(() => {
-    if (selectedIds.size === 0) return false;
-    if (!selectedStatus) return false;
+  const selectedRows = useMemo(() => {
+    if (selectedIds.size === 0) return [];
+    const set = selectedIds;
+    return rows.filter((r) => set.has(r.id));
+  }, [rows, selectedIds]);
 
-    for (const id of selectedIds) {
-      const rr = rows.find((x) => x.id === id);
-      if (!rr) continue;
-      if (rr.status !== selectedStatus) return false;
-    }
-    return true;
-  }, [selectedIds, selectedStatus, rows]);
+  const selectedTotal = useMemo(() => {
+    return selectedRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  }, [selectedRows]);
+
+  const uniformSelectedStatus = useMemo<ReceiptStatus | null>(() => {
+    if (selectedRows.length === 0) return null;
+    const s = selectedRows[0].status;
+    for (const r of selectedRows) if (r.status !== s) return null;
+    return s;
+  }, [selectedRows]);
+
+  const canOpenStatusDrawer = useMemo(() => {
+    return selectedRows.length > 0 && !!uniformSelectedStatus;
+  }, [selectedRows.length, uniformSelectedStatus]);
+
+  const [isStatusDrawerOpen, setIsStatusDrawerOpen] = useState(false);
 
   const bulkUpdateStatus = async (newStatus: ReceiptStatus) => {
-    if (!selectedStatus) return;
-    if (newStatus === selectedStatus) return;
+    if (!uniformSelectedStatus) return;
+    if (newStatus === uniformSelectedStatus) return;
 
     setMsg("");
     setBulkUpdating(true);
@@ -346,6 +368,7 @@ export default function ReceiptsPage() {
       if (error) throw error;
 
       setRows((prev) => prev.map((r) => (selectedIds.has(r.id) ? { ...r, status: newStatus } : r)));
+      setIsStatusDrawerOpen(false);
       clearSelection();
     } catch (e: any) {
       console.log("BULK UPDATE ERROR:", e);
@@ -356,9 +379,35 @@ export default function ReceiptsPage() {
   };
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 8, paddingBottom: 90 }}>
+    <div style={{ margin: "0 auto", paddingBottom: 170 }}>
+      {/* 상단 CTA */}
+      <button
+        onClick={() => router.push("/receipts/new")}
+        style={{
+          width: "100%",
+          marginTop: 0,
+          padding: "12px 12px",
+          borderRadius: 12,
+          border: "1px solid #ddd",
+          background: "#f3f3f3",
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: "pointer",
+        }}
+      >
+        + 새 영수증 등록하기
+      </button>
+      {/* 전체 선택*/}
+      <div style={{ display: "flex", alignItems: "center", gap:10, marginTop: 0 }}>
+        <input
+          type="checkbox"
+          checked={allChecked}
+          onChange={toggleSelectAllFiltered}
+          style={{ width: 18, height: 18, cursor: "pointer"}}
+          aria-label="전체 선택"
+        />
+  
       {/* search + filter row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 0 }}>
         <div
           style={{
             flex: 1,
@@ -367,11 +416,12 @@ export default function ReceiptsPage() {
             gap: 8,
             border: "1px solid #D1D5DB",
             borderRadius: 14,
-            padding: "12px 12px",
+            padding: "10px 10px",
             background: "#fff",
+            minWidth: 0,
           }}
         >
-          <span style={{ fontSize: 16, opacity: 0.8 }}>🔎</span>
+          <span style={{ fontSize: 15, opacity: 0.8 }}>🔎</span>
           <input
             value={vendorQuery}
             onChange={(e) => setVendorQuery(e.target.value)}
@@ -380,7 +430,7 @@ export default function ReceiptsPage() {
               border: "none",
               outline: "none",
               width: "100%",
-              fontSize: 14,
+              fontSize: 13,
               background: "transparent",
             }}
           />
@@ -389,7 +439,6 @@ export default function ReceiptsPage() {
         <button
           type="button"
           onClick={() => {
-            if (canShowBulkDrawer) clearSelection();
             setIsFilterOpen(true);
           }}
           style={{
@@ -402,6 +451,7 @@ export default function ReceiptsPage() {
             gap: 4,
             cursor: "pointer",
             whiteSpace: "nowrap",
+            marginTop: 5
           }}
           aria-label="필터"
           >
@@ -427,7 +477,7 @@ export default function ReceiptsPage() {
         </div>
       ) : null}
 
-      <div style={{ marginTop: 10, borderTop: "1px solid #E5E7EB" }} />
+      <div style={{ marginTop: 6, borderTop: "1px solid #E5E7EB" }} />
 
       {/* list */}
       {loading ? (
@@ -450,14 +500,14 @@ export default function ReceiptsPage() {
                 style={{
                   display: "flex",
                   alignItems: "center", // ✅ (1) 행 전체를 세로 가운데로
-                  gap: 7,
-                  padding: "2px 1px",
+                  gap: 8,
+                  padding: "1px 1px",
                   background: isCompleted ? "#D9D9D9" : "#FFFFFF",
                   borderBottom: "1px solid #CDCDCD",
                 }}
               >
                 {/* checkbox */}
-                <div style={{ display: "flex", alignItems: "center", paddingLeft: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", paddingLeft: 5 }}>
                   <input
                     type="checkbox"
                     checked={isSelected}
@@ -495,7 +545,7 @@ export default function ReceiptsPage() {
                     }}
                   >
                     {/* ✅ (2) payment method: amount 앞, 옅은 회색 */}
-                    <div style={{ fontSize: 12, color: "#898b8e", fontWeight: 500 }}>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
                       {paymentLabel(r.payment_method)}
                     </div>
 
@@ -525,6 +575,73 @@ export default function ReceiptsPage() {
           })}
         </ul>
       )}
+
+      {/* ✅ 하단 고정: 필터된 전체 합계 */}
+      <div
+        style={{
+          position: "fixed",
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: "100%",
+          maxWidth: 448,
+          bottom: 65,
+          zIndex: 30,
+          background: "#efefef",
+          borderTop: "1px solid #242424",
+          padding: "10px 12px",
+        }}
+      >
+        <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, marginLeft: "auto" }}>
+            합계&nbsp;&nbsp;{formatMoney(filteredTotal)} 원
+          </div>
+        </div>
+      </div>
+
+      {selectedRows.length > 0 ? (
+        <div
+          style={{
+            position: "fixed",
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: "100%",
+            maxWidth: 448,
+            bottom: 66 + 47, // ✅ nav(64) + 합계바 높이(대충 52)
+            zIndex: 31,
+            background: "#fafafa",
+            borderTop: "1px solid #E5E7EB",
+            padding: "2px 12px",
+          }}
+        >
+          <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center", gap: 10, marginTop: 4, marginBottom: 2 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>
+              (선택 합계 {formatMoney(selectedTotal)} 원)
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setPendingStatus(uniformSelectedStatus);
+                setIsStatusDrawerOpen(true);
+              }}
+              disabled={!canOpenStatusDrawer}
+              style={{
+                marginLeft: "auto",
+                border: "1px solid #0B1F5B",
+                background: canOpenStatusDrawer ? "#0B1F5B" : "#E5E7EB",
+                color: canOpenStatusDrawer ? "#fff" : "#6B7280",
+                borderRadius: 10,
+                padding: "4px 10px",
+                fontSize: 13,
+                cursor: canOpenStatusDrawer ? "pointer" : "not-allowed",
+              }}
+              title={!canOpenStatusDrawer ? "같은 상태만 선택했을 때 변경 가능" : ""}
+            >
+              상태 변경
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* =========================
           Filter Drawer (Bottom Sheet)
@@ -592,9 +709,10 @@ export default function ReceiptsPage() {
                         padding: "10px 8px",
                         borderRadius: 10,
                         border: "1px solid #E5E7EB",
-                        background: active ? "#E5E7EB" : "#F3F4F6",
+                        background: active ? "#cfcece" : "#F3F4F6",
                         fontSize: 13,
                         cursor: "pointer",
+                        fontWeight: active ? 900 : undefined
                       }}
                     >
                       {periodLabel(p)}
@@ -654,6 +772,7 @@ export default function ReceiptsPage() {
                         color: active ? st.text : "#111827",
                         fontSize: 13,
                         cursor: "pointer",
+                        fontWeight: active ? 900 : undefined,
                       }}
                     >
                       {statusLabel(s)}
@@ -684,7 +803,7 @@ export default function ReceiptsPage() {
                         color: "#111827",
                         fontSize: 13,
                         cursor: "pointer",
-                        fontWeight: active ? 900 : 700,
+                        fontWeight: active ? 900 : undefined,
                       }}
                     >
                       {paymentLabel(pm)}
@@ -711,7 +830,7 @@ export default function ReceiptsPage() {
                     background: "#F9FAFB",
                     cursor: "pointer",
                     fontSize: 13,
-                    fontWeight: 700,
+                    fontWeight: 800,
                   }}
                 >
                   초기화
@@ -721,103 +840,90 @@ export default function ReceiptsPage() {
         </>
       ) : null}
 
-      {/* =========================
-          Bulk Status Drawer (Sticky)
-          ========================= */}
-      {canShowBulkDrawer ? (
-        <div
-          style={{
-            position: "fixed",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            zIndex: 40,
-            padding: 12,
-            background: "#FFFFFF",
-            borderTop: "1px solid #E5E7EB",
-          }}
-        >
-          <div style={{ maxWidth: 420, margin: "0 auto" }}>
-            <div style={{ display: "flex", alignItems: "center"}}>
-              <div style={{ fontSize: 13, fontWeight: 800 }}>
-                {selectedIds.size}개 선택됨 · 현재 {selectedStatus ? statusLabel(selectedStatus) : "-"}
-                {pendingStatus && pendingStatus !== selectedStatus ? (
-                  <span style={{ marginLeft: 8, fontWeight: 800, opacity: 0.8}}>
-                    → {statusLabel(pendingStatus)}
-                  </span>
-                ) : null}
-              </div>
+      {isStatusDrawerOpen ? (
+        <>
+          <div
+            onClick={() => setIsStatusDrawerOpen(false)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.25)", zIndex: 70 }}
+          />
 
+          <div
+            style={{
+              position: "fixed",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 80,
+              background: "#fff",
+              borderTopLeftRadius: 18,
+              borderTopRightRadius: 18,
+              padding: 16,
+              boxShadow: "0 -10px 30px rgba(0,0,0,0.12)",
+              maxWidth: 420,
+              margin: "0 auto",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 900 }}>
+                {selectedRows.length}개 · 현재 {uniformSelectedStatus ? statusLabel(uniformSelectedStatus) : "-"}
+              </div>
               <button
                 onClick={() => {
                   if (!pendingStatus) return;
                   bulkUpdateStatus(pendingStatus);
-                  setPendingStatus(null);
                 }}
-                disabled={!pendingStatus || bulkUpdating || pendingStatus === selectedStatus}
+                disabled={
+                  !pendingStatus ||
+                  bulkUpdating ||
+                  !uniformSelectedStatus ||
+                  pendingStatus === uniformSelectedStatus
+                }
                 style={{
                   marginLeft: "auto",
                   border: "none",
                   background: "transparent",
-                  padding: "6px 8px",
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: 900,
                   cursor:
-                    !pendingStatus || bulkUpdating || pendingStatus === selectedStatus
+                    !pendingStatus ||
+                    bulkUpdating ||
+                    !uniformSelectedStatus ||
+                    pendingStatus === uniformSelectedStatus
                       ? "not-allowed"
                       : "pointer",
                   opacity:
-                    !pendingStatus || bulkUpdating || pendingStatus === selectedStatus ? 0.35 : 0.95,
+                    !pendingStatus ||
+                    bulkUpdating ||
+                    !uniformSelectedStatus ||
+                    pendingStatus === uniformSelectedStatus
+                      ? 0.35
+                      : 1,
                 }}
               >
                 확인
               </button>
             </div>
 
-            <div
-              style={{
-                marginTop: 10,
-                display: "grid",
-                gridTemplateColumns: "repeat(4, 1fr)",
-                gap: 8,
-              }}
-            >
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
               {(["uploaded", "requested", "needs_fix", "completed"] as ReceiptStatus[]).map((s) => {
                 const st = statusButtonStyle(s);
-
-                const isDisabled = s === selectedStatus || bulkUpdating; // bulkUpdating도 같이 잠금
-                const isPicked = pendingStatus === s; // ✅ “선택됨” 표시
-
-                // ✅ 선택 시: border 두껍게 + 배경을 연하게 틴트 + 살짝 그림자
-                // (완료만 보이던 문제 해결: 나머지 상태도 border 색으로 tint를 만들어 줌)
-                const pickedBg =
-                  s === "completed"
-                    ? "#E9ECEF" // 완료는 원래 회색 계열이라 조금 더 진한 틴트
-                    : `color-mix(in srgb, ${st.border} 14%, white)`; // 최신 브라우저 지원 (크롬/사파리/엣지 대부분 OK)
+                const disabled = !uniformSelectedStatus || bulkUpdating || s === uniformSelectedStatus;
 
                 return (
                   <button
                     key={s}
-                    onClick={() => setPendingStatus(s)}
-                    disabled={isDisabled}
+                    onClick={() => setPendingStatus(s)} // ✅ 기존 함수 그대로 재사용
+                    disabled={!uniformSelectedStatus || bulkUpdating}
                     style={{
                       padding: "10px 8px",
                       borderRadius: 12,
-
-                      border: `${isPicked ? 2 : 1}px solid ${st.border}`,
-                      background: isPicked ? pickedBg : "#FFFFFF",
-
+                      border: `2px solid ${pendingStatus === s ? st.border : "#E5E7EB"}`,
+                      background: "#fff",
                       color: st.text,
                       fontSize: 13,
-                      fontWeight: isPicked ? 900 : 800,
-
-                      cursor: isDisabled ? "not-allowed" : "pointer",
-                      opacity: isDisabled ? 0.5 : 1,
-
-                      // ✅ 선택감 강화(살짝 눌린 느낌)
-                      boxShadow: isPicked ? `0 0 0 2px rgba(0,0,0,0.04)` : "none",
-                      transform: isPicked ? "translateY(-1px)" : "none",
-                      transition: "all 120ms ease",
+                      fontWeight: 900,
+                      cursor: disabled ? "not-allowed" : "pointer",
+                      opacity: disabled ? 0.4 : 1,
                     }}
                   >
                     {statusLabel(s)}
@@ -826,12 +932,9 @@ export default function ReceiptsPage() {
               })}
             </div>
 
-
-            {bulkUpdating ? (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>상태 변경 중…</div>
-            ) : null}
+            {bulkUpdating ? <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>상태 변경 중…</div> : null}
           </div>
-        </div>
+        </>
       ) : null}
     </div>
   );
