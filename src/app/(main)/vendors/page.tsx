@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+
+type ReceiptStatus = "needs_fix" | "requested" | "uploaded" | "completed";
 
 type VendorRow = {
   vendor_id: string;
@@ -11,13 +14,29 @@ type VendorRow = {
   invoice_capability: "supported" | "not_supported" | null;
   market_name: string | null;
   market_sort_order: number | null;
-  status_summary: "needs_fix" | "requested" | "uploaded" | "completed" | null;
+  status_summary: ReceiptStatus | null;
   status_priority: number;
   stall_no_num: number | null;
 };
 
+type ReceiptLite = {
+  vendor_id: string | null;
+  status: ReceiptStatus | string | null;
+  amount: number | null;
+};
+
+const STATUS_ORDER: ReceiptStatus[] = [ "needs_fix", "uploaded", "requested", "completed"];
+
 function capabilityDot(v: VendorRow) {
   return v.invoice_capability === "supported" ? "🔴" : "🔘";
+}
+
+function statusLabel(s: ReceiptStatus) {
+  if (s === "needs_fix") return "수정필요";
+  if (s === "requested") return "요청중";
+  if (s === "uploaded") return "업로드";
+  if (s === "completed") return "완료";
+  return "";
 }
 
 function formatStallNo(stallNo: string | null) {
@@ -27,271 +46,290 @@ function formatStallNo(stallNo: string | null) {
   return t.endsWith("호") ? t : `${t}호`;
 }
 
-function NameLine({ name, stallNo }: { name: string; stallNo: string | null }) {
-  const stallText = formatStallNo(stallNo);
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "baseline",
-        gap: 6,
-        minWidth: 0,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {/* name: 주 텍스트 (ellipsis 대상) */}
-      <span
-        style={{
-          fontSize: 16,
-          fontWeight: 700,
-          color: "#111",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          minWidth: 0,
-        }}
-      >
-        {name}
-      </span>
-
-      {/* stall_no: 보조 텍스트 (superscript 느낌) */}
-      {stallText ? (
-        <span
-          style={{
-            fontSize: 14,
-            fontWeight: 500,
-            color: "#555",
-            transform: "translateY(0px)", // 네가 현재 0으로 둔 상태 유지
-            flexShrink: 0,
-          }}
-        >
-          {stallText}
-        </span>
-      ) : null}
-    </div>
-  );
+function formatCount(n: number) {
+  return n >= 99 ? "99+" : String(n);
 }
 
-export default function VendorsPage() {
-  const [rows, setRows] = useState<VendorRow[]>([]);
-  const [q, setQ] = useState("");
+function formatKRW(n: number) {
+  // 합계 표시: 1,234,567원
+  return `${Math.round(n).toLocaleString("ko-KR")}원`;
+}
+
+export default function MainHomePage() {
+  const router = useRouter();
+
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [receiptCountsByVendor, setReceiptCountsByVendor] = useState<
+    Record<string, Record<string, number>>
+  >({});
+  const [receiptAmountSumByVendor, setReceiptAmountSumByVendor] = useState<
+    Record<string, Record<string, number>>
+  >({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase
+      setLoading(true);
+
+      // 1) vendor 목록
+      const { data: vendorData, error: vendorError } = await supabase
         .from("v_vendor_list_page2")
         .select("*")
-        // .order("status_priority", { ascending: true })
+        .order("status_priority", { ascending: true })
         .order("market_sort_order", { ascending: true, nullsFirst: false })
         .order("name", { ascending: true })
         .order("stall_no_num", { ascending: true, nullsFirst: false })
         .order("stall_no", { ascending: true, nullsFirst: false });
 
-      if (error) {
-        console.error(error);
-        alert("데이터 로드 실패: 콘솔(F12) 확인");
+      if (vendorError) {
+        console.error(vendorError);
+        alert("상가 데이터 로드 실패: 콘솔(F12) 확인");
+        setLoading(false);
         return;
       }
-      setRows((data ?? []) as VendorRow[]);
+
+      const vendorRows = (vendorData ?? []) as VendorRow[];
+
+      // 2) receipts 집계 (vendor_id, status, amount)
+      const { data: receiptData, error: receiptError } = await supabase
+        .from("receipts")
+        .select("vendor_id,status,amount");
+
+      if (receiptError) {
+        console.error(receiptError);
+        alert("영수증 데이터 로드 실패: 콘솔(F12) 확인");
+        setLoading(false);
+        return;
+      }
+
+      const counts: Record<string, Record<string, number>> = {};
+      const sums: Record<string, Record<string, number>> = {};
+
+      for (const r of (receiptData ?? []) as ReceiptLite[]) {
+        if (!r.vendor_id) continue;
+        const vid = r.vendor_id;
+
+        const st = (r.status ?? "").toString();
+        if (!st) continue;
+
+        const amt = Number(r.amount ?? 0);
+
+        if (!counts[vid]) counts[vid] = {};
+        if (!sums[vid]) sums[vid] = {};
+
+        counts[vid][st] = (counts[vid][st] ?? 0) + 1;
+        sums[vid][st] = (sums[vid][st] ?? 0) + amt;
+      }
+
+      setVendors(vendorRows);
+      setReceiptCountsByVendor(counts);
+      setReceiptAmountSumByVendor(sums);
+      setLoading(false);
     })();
   }, []);
 
-  const filtered = useMemo(() => {
-    const keyword = q.trim().toLowerCase();
-    if (!keyword) return rows;
-    return rows.filter((r) => {
-      const hay = `${r.market_name ?? ""} ${r.stall_no ?? ""} ${r.name ?? ""}`.toLowerCase();
-      return hay.includes(keyword);
-    });
-  }, [q, rows]);
+  // ✅ status별 섹션 구성 (상가가 status마다 중복 노출될 수 있음)
+  const sections = useMemo(() => {
+    const byStatus: Record<
+      ReceiptStatus,
+      {
+        status: ReceiptStatus;
+        totalCount: number;
+        totalAmount: number;
+        vendors: Array<{ v: VendorRow; count: number }>;
+      }
+    > = {
+      needs_fix: { status: "needs_fix", totalCount: 0, totalAmount: 0, vendors: [] },
+      requested: { status: "requested", totalCount: 0, totalAmount: 0, vendors: [] },
+      uploaded: { status: "uploaded", totalCount: 0, totalAmount: 0, vendors: [] },
+      completed: { status: "completed", totalCount: 0, totalAmount: 0, vendors: [] },
+    };
 
-  // 🔴 supported 상가만 상단 섹션으로 분리
-  const supportedVendors = useMemo(() => {
-    return filtered.filter((v) => v.invoice_capability === "supported")
-    .slice() // 원본 배열 복사
-    .sort((a, b) =>{
-      // 1. status_priority 기준으로 먼저 정렬 (영수증 업로드 등 우선 순위)
-      if (a.status_priority !==b.status_priority) {
-        return a.status_priority - b.status_priority;
-        }
-        // 2. 우선순위가 같은면 이름순(가나다)
-        return a.name.localeCompare(b.name,'ko')      
-  });
- }, [filtered]);
+    for (const st of STATUS_ORDER) {
+      let totalCount = 0;
+      let totalAmount = 0;
 
-  // 시장별 그룹 (드랍다운)
-  const groupedByMarket = useMemo(() => {
-    const map = new Map<string, VendorRow[]>();
-    for (const v of filtered) {
-      const key = v.market_name ?? "기타";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(v);
+      const list: Array<{ v: VendorRow; count: number }> = [];
+
+      // vendors의 기존 정렬 순서 유지한 채로 status별로 필터
+      for (const v of vendors) {
+        const vid = v.vendor_id;
+        const c = receiptCountsByVendor?.[vid]?.[st] ?? 0;
+        if (c <= 0) continue;
+
+        const s = receiptAmountSumByVendor?.[vid]?.[st] ?? 0;
+
+        totalCount += c;
+        totalAmount += s;
+
+        list.push({ v, count: c });
+      }
+
+      byStatus[st] = { status: st, totalCount, totalAmount, vendors: list };
     }
 
-    const groups = Array.from(map.entries()).map(([market, list]) => {
-      const sortOrder = list.find((x) => x.market_name === market)?.market_sort_order ?? 999999;
-      return { market, sortOrder, list };
-    });
-
-    groups.sort((a, b) => (a.sortOrder ?? 999999) - (b.sortOrder ?? 999999));
-    return groups;
-  }, [filtered]);
+    // 영수증이 1건이라도 있는 섹션만 노출
+    return STATUS_ORDER.map((st) => byStatus[st]).filter((sec) => sec.totalCount > 0);
+  }, [vendors, receiptCountsByVendor, receiptAmountSumByVendor]);
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 16 }}>
-      {/* 검색 */}
-      <div style={{ marginTop: 0 }}>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="🔍 상가명 / 호수 / 시장 검색"
-          style={{
-            width: "100%",
-            padding: "12px 12px",
-            borderRadius: 12,
-            border: "1px solid #ddd",
-            fontSize: 14,
-          }}
-        />
-      </div>
+    <div style={{ margin: "0 auto", padding: 0 }}>
+      <div style={{ marginTop: 0}} />
 
-      {/* 🔴 supported 섹션 */}
-      <div style={{ marginTop: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-          🔴 세금계산서 지원 상가
+      {loading ? (
+        <div style={{ padding: "12px 0", fontSize: 14, opacity: 0.7 }}>불러오는 중…</div>
+      ) : sections.length === 0 ? (
+        <div style={{ padding: "12px 0", fontSize: 14, opacity: 0.7 }}>
+          아직 등록된 영수증이 없어요.
         </div>
-
-        {supportedVendors.length === 0 ? (
-          <div style={{ fontSize: 13, opacity: 0.7 }}>검색 조건에 해당하는 지원 상가가 없어요.</div>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {supportedVendors.map((v) => (
-              <li key={v.vendor_id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                <Link
-                  href={`/vendors/${v.vendor_id}/receipts/new`}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "10px 4px",
-                    textDecoration: "none",
-                    color: "inherit",
-                  }}
-                >
-                  <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>
-                    [{v.market_name ?? "-"}]
-                  </span>
-
-                  <span style={{ fontSize: 14, lineHeight: 1 }}>{capabilityDot(v)}</span>
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <NameLine name={v.name} stallNo={v.stall_no} />
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div style={{ marginTop: 18, borderTop: "2px solid #ddd" }} />
-
-      {/* 시장별 드랍다운: 기본 펼침 */}
-      <div style={{ marginTop: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>시장별 보기</div>
-
-        {groupedByMarket.map((g) => (
-          <details
-            key={g.market}
-            open
-            className="market-details"
-            style={{ border: "1px solid #eee", borderRadius: 12, marginBottom: 10 }}
-          >
-            <summary
-              style={{
-                padding: "10px 12px",
-                cursor: "pointer",
-                fontSize: 14,
-                fontWeight: 700,
-                listStyle: "none",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 10,
-              }}
-            >
-              {/* 왼쪽: 시장명 + 카운트 */}
-              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {g.market}
-                </span>
-                <span style={{ fontSize: 12, opacity: 0.7, flexShrink: 0 }}>({g.list.length})</span>
-              </span>
-
-              {/* 오른쪽: 커스텀 화살표 */}
-              <span
-                className="market-chevron"
-                aria-hidden
+      ) : (
+        <div>
+          {sections.map((sec, idx) => (
+            <div key={sec.status} 
+                  style={{ 
+                    paddingTop: idx === 0? 2 : 14, // 🔻 첫 섹션 위 갭 줄이기 / 이후 섹션은 띄우기
+                    marginBottom: 0,
+                    }}>
+              {/* ✅ status 헤더: /vendors/[vendorId] 느낌으로 (count+label 박스 유지)
+                  - 여기 박스는 "해당 status의 내 영수증 전체 합계"로 표시
+              */}
+              <div
                 style={{
-                  fontSize: 14,
-                  opacity: 0.7,
-                  lineHeight: 1,
-                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  padding: "2px 4px",
                 }}
               >
-                ▶︎
-              </span>
-            </summary>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "#111" }}>
+                    {statusLabel(sec.status)}
+                  </div>
+                  <div style={{ fontSize: 16, opacity: 0.9 }}>
+                    {formatCount(sec.totalCount)}건
+                  </div>
+                </div>
 
-            <div style={{ padding: "0 8px 8px 8px" }}>
+                {/* 합계 박스 (유지)
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "baseline",
+                    gap: 14,
+                    padding: "6px 10px",
+                    borderRadius: 12,
+                    background: "#eeeeee",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ fontSize: 12, opacity: 0.9 }}>합계</span>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>{formatKRW(sec.totalAmount)}</span>
+                </div> */}
+              </div>
+
+              <div style={{ borderTop: "1px solid #f0f0f0" }} />
+
+              {/* ✅ status 아래 상가 리스트 */}
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {g.list.map((v) => (
-                  <li key={v.vendor_id} style={{ borderBottom: "1px solid #f3f3f3" }}>
-                    <Link
-                      href={`/vendors/${v.vendor_id}/receipts/new`}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "10px 6px",
-                        textDecoration: "none",
-                        color: "inherit",
-                      }}
-                    >
-                      <span style={{ fontSize: 14, lineHeight: 1 }}>{capabilityDot(v)}</span>
+                {sec.vendors.map(({ v, count }) => {
+                  const vid = v.vendor_id;
+                  const stallText = formatStallNo(v.stall_no);
 
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <NameLine name={v.name} stallNo={v.stall_no} />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
+                  return (
+                    <li key={`${vid}-${sec.status}`} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <Link
+                        href={`/vendors/${vid}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "6px 4px",
+                          textDecoration: "none",
+                          color: "inherit",
+                        }}
+                      >
+                        {/* [market] */}
+                        <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>
+                          [{v.market_name ?? "-"}]
+                        </span>
+
+                        {/* 🔴 / 🔘 */}
+                        <span style={{ fontSize: 12, lineHeight: 1 }}>{capabilityDot(v)}</span>
+
+                        {/* name / stall_no */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "baseline",
+                              gap: 6,
+                              minWidth: 0,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 16,
+                                fontWeight: 700,
+                                color: "#111",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                minWidth: 0,
+                              }}
+                            >
+                              {v.name}
+                            </span>
+
+                            {stallText ? (
+                              <span
+                                style={{
+                                  fontSize: 14,
+                                  fontWeight: 500,
+                                  color: "#555",
+                                  transform: "translateY(0px)",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {stallText}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {/* ✅ 홈화면 row 오른쪽: 박스 제거, count만 */}
+                        <span
+                          style={{
+                            fontSize: 14,
+                            fontWeight: 800,
+                            color: "#111",
+                            minWidth: 36,
+                            textAlign: "right",
+                          }}
+                          title={`${statusLabel(sec.status)} ${count}건`}
+                        >
+                          {formatCount(count)}
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
-          </details>
-        ))}
+          ))}
+        </div>
+      )}
+
+      {/* 하단: 전체 상가 리스트 */}
+      <div style={{ marginTop: 10 }}>
+        <div style={{ borderTop: "2px solid #ddd" }} />
+        <div style={{ height: 6 }} />
+
+        <Link href="/vendors/all" style={{ fontSize: 14, textDecoration: "underline" }}>
+          전체 리스트 보기 →
+        </Link>
       </div>
-
-      {/* ✅ 변경점 2: 기본 marker 제거 + open 상태 회전 */}
-      <style jsx>{`
-        /* 1) 브라우저 기본 summary 화살표(marker) 제거 */
-        .market-details summary {
-          list-style: none;
-        }
-        .market-details summary::-webkit-details-marker {
-          display: none;
-        }
-
-        /* 2) 아이콘 회전(닫힘=▶︎, 열림=▼처럼 보이게) */
-        .market-chevron {
-          display: inline-block;
-          transition: transform 140ms ease;
-        }
-        .market-details[open] .market-chevron {
-          transform: rotate(90deg);
-        }
-      `}</style>
     </div>
   );
 }

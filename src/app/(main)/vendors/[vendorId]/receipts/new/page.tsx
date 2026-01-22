@@ -11,6 +11,7 @@ type ReceiptType = "standard" | "simple";
 type InvoiceCapability = "supported" | "not_supported" | null;
 
 const MAX_IMAGES = 3;
+const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif";
 
 function todayYYYYMMDD() {
   const d = new Date();
@@ -42,10 +43,71 @@ function capabilityDot(invoice_capability: InvoiceCapability) {
   return invoice_capability === "supported" ? "🔴" : "🔘";
 }
 
+const WEBP_MAX_SIDE = 1600;
+const WEBP_QUALITY = 0.82;
+
+function getExtLower(name: string) {
+  return (name.split(".").pop() || "").toLowerCase();
+}
+
+function isHeicLike(file: File) {
+  const ext = getExtLower(file.name);
+  return file.type === "image/heic" || file.type === "image/heif" || ext === "heic" || ext === "heif";
+}
+
+async function decodeToBitmap(file: File): Promise<ImageBitmap> {
+  let blob: Blob = file;
+
+  if (isHeicLike(file)) {
+    const heic2any = (await import("heic2any")).default;
+    const converted = await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.92,
+    });
+    blob = Array.isArray(converted) ? converted[0] : converted;
+  }
+
+  return await createImageBitmap(blob);
+}
+
+async function fileToWebpResized(file: File, slotIndex: number): Promise<File> {
+  const bitmap = await decodeToBitmap(file);
+
+  const w = bitmap.width;
+  const h = bitmap.height;
+  const maxSide = Math.max(w, h);
+  const scale = maxSide > WEBP_MAX_SIDE ? WEBP_MAX_SIDE / maxSide : 1;
+
+  const tw = Math.max(1, Math.round(w * scale));
+  const th = Math.max(1, Math.round(h * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = tw;
+  canvas.height = th;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("이미지 변환에 실패했습니다.(canvas)");
+
+  ctx.drawImage(bitmap, 0, 0, tw, th);
+  bitmap.close?.();
+
+  const webpBlob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("이미지 변환에 실패했습니다.(toBlob)"))),
+      "image/webp",
+      WEBP_QUALITY
+    );
+  });
+
+  const safeBase = (file.name || `image_${slotIndex + 1}`).replace(/\.[^/.]+$/, "");
+  return new File([webpBlob], `${safeBase}.webp`, { type: "image/webp" });
+}
+
 export default function NewReceiptPage() {
   const router = useRouter();
-  const params = useParams<{ vendorId: string }>();
-  const vendorId = params.vendorId;
+  const params = useParams<{ vendorId: string | string[] }>();
+  const vendorId = Array.isArray(params.vendorId) ? params.vendorId[0] : params.vendorId;
 
   const filePickerRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
@@ -145,6 +207,18 @@ export default function NewReceiptPage() {
     });
   }
 
+  async function processPickedFile(slot: number, rawFile: File) {
+    setMsg("");
+
+    try {
+      const webp = await fileToWebpResized(rawFile, slot);
+      setFileAtSlot(slot, webp);
+    } catch (e: any) {
+      console.error("image convert error:", e);
+      setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
+    }
+  }
+
   function removeImageAt(idx: number) {
     setFiles((prev) => {
       const next = [...prev];
@@ -172,21 +246,28 @@ export default function NewReceiptPage() {
     cameraRef.current?.click();
   }
 
-  function onPickFromFile(inputFiles: FileList | null) {
+  async function onPickFromFile(inputFiles: FileList | null) {
     if (!inputFiles || inputFiles.length === 0) return;
     if (sheetSlot === null) return;
-    setFileAtSlot(sheetSlot, inputFiles[0]);
+
+    const f = inputFiles[0];
     if (filePickerRef.current) filePickerRef.current.value = "";
     closeSheet();
+
+    await processPickedFile(sheetSlot, f);
   }
 
-  function onPickFromCamera(inputFiles: FileList | null) {
+  async function onPickFromCamera(inputFiles: FileList | null) {
     if (!inputFiles || inputFiles.length === 0) return;
+
     const slot = sheetSlot ?? files.findIndex((f) => !f);
     if (slot === -1) return;
-    setFileAtSlot(slot, inputFiles[0]);
+
+    const f = inputFiles[0];
     if (cameraRef.current) cameraRef.current.value = "";
     closeSheet();
+
+    await processPickedFile(slot, f);
   }
 
     async function onSave() {
@@ -216,21 +297,26 @@ export default function NewReceiptPage() {
       const targetVendorId = vendorId;
 
       const uploadedPaths: string[] = [];
+
       try {
-        for (let i = 0; i < actualFiles.length; i++) {
-          const f = actualFiles[i];
-          const ext = (f.name.split(".").pop() || "jpg").toLowerCase();
+        for (let idx = 0; idx < 3; idx++) {
+          const f = files[idx];
+          if (!f) continue;
 
           const key =
             typeof crypto !== "undefined" && "randomUUID" in crypto
               ? crypto.randomUUID()
               : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-          const path = `${userId}/${targetVendorId}/${ts}_${i + 1}_${key}.${ext}`;
+          const path = `${userId}/${targetVendorId}/${ts}_${idx + 1}_${key}.webp`;
 
           const { error: upErr } = await supabase.storage
             .from("receipts")
-            .upload(path, f, { upsert: false });
+            .upload(path, f, {
+              upsert: false,
+              contentType: "image/webp",
+              cacheControl: "3600",
+            });
 
           if (upErr) throw upErr;
           uploadedPaths.push(path);
@@ -263,7 +349,7 @@ export default function NewReceiptPage() {
         throw insErr;
       }
 
-      router.push(`/vendors/${vendorId}`);
+      router.replace(`/vendors/${vendorId}`);
     } catch (e: any) {
       setMsg(e?.message ?? "저장 오류");
     } finally {
@@ -374,14 +460,14 @@ export default function NewReceiptPage() {
       <input
         ref={filePickerRef}
         type="file"
-        accept="image/*"
+        accept={IMAGE_ACCEPT}
         style={{ display: "none" }}
         onChange={(e) => onPickFromFile(e.target.files)}
       />
       <input
         ref={cameraRef}
         type="file"
-        accept="image/*"
+        accept={IMAGE_ACCEPT}
         capture="environment"
         style={{ display: "none" }}
         onChange={(e) => onPickFromCamera(e.target.files)}
@@ -496,10 +582,10 @@ export default function NewReceiptPage() {
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000936", background: "#ffffff" })}
-            {StatusButton("requested", "요청중", { border: "3px solid #16a34a", color: "#166534", background: "#ecfdf5" })}
-            {StatusButton("needs_fix", "수정필요", { border: "3px solid #f59e0b", color: "#92400e", background: "#fffbeb" })}
-            {StatusButton("completed", "완료", { border: "3px solid #9ca3af", color: "#374151", background: "#f3f4f6" })}
+            {StatusButton("uploaded", "업로드", { border: "3px solid #000936", color: "#000936", background: "#ffffff" })}
+            {StatusButton("requested", "요청중", { border: "3px solid #16A34A", color: "#001709", background: "#c9ffcf" })}
+            {StatusButton("needs_fix", "수정필요", { border: "3px solid #ff3300", color: "#351400", background: "#fff2f2" })}
+            {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#050608", background: "#eae9e9" })}
           </div>
         </div>
 

@@ -1,8 +1,10 @@
 "use client";
 
+import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import ReceiptLightbox from "@/components/ReceiptLightbox";
 
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
@@ -28,15 +30,6 @@ type VendorInfo = {
   stall_no: string | null;
   invoice_capability: InvoiceCapability;
   market_name?: string | null;
-};
-
-type ReceiptImageRow = {
-  id: string;
-  receipt_id: string;
-  user_id: string;
-  path: string;
-  sort_order: number; // 1~3
-  created_at: string;
 };
 
 function formatWon(n: number) {
@@ -87,10 +80,8 @@ export default function ReceiptDetailPage() {
   const [receipt, setReceipt] = useState<ReceiptRow | null>(null);
   const [vendor, setVendor] = useState<VendorInfo | null>(null);
 
-  const [images, setImages] = useState<Array<{ sort_order: number; path: string }>>([]);
   const [signedUrls, setSignedUrls] = useState<Array<{ sort_order: number; url: string }>>([]);
-
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState<{ startIndex: number } | null>(null);
 
   const marketBadgeStyle: React.CSSProperties = {
     fontSize: 13,
@@ -124,7 +115,6 @@ export default function ReceiptDetailPage() {
         const userId = authData?.user?.id ?? null;
         if (!userId) throw new Error("로그인이 필요합니다.");
 
-        // 1) receipt 본문 로드
         const { data: r, error: rErr } = await supabase
           .from("receipts")
           .select("id, vendor_id, amount, payment_method, deposit_date, receipt_date, receipt_type, status, memo, created_at")
@@ -134,29 +124,25 @@ export default function ReceiptDetailPage() {
 
         if (rErr) throw rErr;
         if (!r) throw new Error("영수증을 찾을 수 없습니다.");
-
         if (ignore) return;
+
         setReceipt(r as any);
 
-        // 2) vendor 정보 로드 (vendors + markets 조합이 있으면 더 좋지만, 최소 필드만)
-        // - 너의 schema에 vendors.markets 관계가 있던 흐름이 있어 보여서, 아래처럼 시도
         const { data: v, error: vErr } = await supabase
           .from("vendors")
           .select("id, name, stall_no, invoice_capability, markets(name)")
           .eq("id", (r as any).vendor_id)
           .maybeSingle();
 
-        // markets(name) 조인이 안 되면 에러날 수 있으니, 실패하면 vendors 단독으로 재시도
-        if (vErr) {
-          const { data: v2, error: v2Err } = await supabase
-            .from("vendors")
-            .select("id, name, stall_no, invoice_capability")
-            .eq("id", (r as any).vendor_id)
-            .maybeSingle();
+        if (!ignore) {
+          if (vErr) {
+            const { data: v2, error: v2Err } = await supabase
+              .from("vendors")
+              .select("id, name, stall_no, invoice_capability")
+              .eq("id", (r as any).vendor_id)
+              .maybeSingle();
+            if (v2Err) throw v2Err;
 
-          if (v2Err) throw v2Err;
-
-          if (!ignore) {
             setVendor({
               id: v2!.id,
               name: v2!.name,
@@ -164,9 +150,7 @@ export default function ReceiptDetailPage() {
               invoice_capability: (v2 as any).invoice_capability ?? null,
               market_name: null,
             });
-          }
-        } else {
-          if (!ignore) {
+          } else {
             setVendor({
               id: (v as any).id,
               name: (v as any).name,
@@ -177,10 +161,9 @@ export default function ReceiptDetailPage() {
           }
         }
 
-        // 3) receipt_images 로드 (1~3)
         const { data: imgs, error: imgErr } = await supabase
           .from("receipt_images")
-          .select("id, receipt_id, user_id, path, sort_order, created_at")
+          .select("path, sort_order")
           .eq("receipt_id", receiptId)
           .eq("user_id", userId)
           .order("sort_order", { ascending: true });
@@ -192,15 +175,9 @@ export default function ReceiptDetailPage() {
           .filter((x) => x.path && Number.isFinite(x.sort_order))
           .sort((a, b) => a.sort_order - b.sort_order);
 
-        if (!ignore) setImages(normalized);
-
-        // 4) signed url 생성 (병렬)
         const signedResults = await Promise.all(
           normalized.map(async (it) => {
-            const { data: s, error: sErr } = await supabase.storage
-              .from("receipts")
-              .createSignedUrl(it.path, 60 * 60);
-
+            const { data: s, error: sErr } = await supabase.storage.from("receipts").createSignedUrl(it.path, 60 * 60);
             if (sErr) return null;
             const url = s?.signedUrl ?? null;
             if (!url) return null;
@@ -231,7 +208,6 @@ export default function ReceiptDetailPage() {
   }, [receipt]);
 
   const backTarget = useMemo(() => {
-    // 우선순위: fromVendor -> vendors page / from=receipts -> receipts list / default back()
     if (fromVendor) return `/vendors/${fromVendor}`;
     if (from === "receipts") return `/receipts`;
     return null;
@@ -244,32 +220,20 @@ export default function ReceiptDetailPage() {
 
   const onEdit = () => {
     if (!receipt) return;
-    const vid = receipt.vendor_id;
     const qs = new URLSearchParams();
     qs.set("edit", receipt.id);
-
-    // 수정 후 돌아갈 맥락을 남겨두기
     if (fromVendor) qs.set("fromVendor", fromVendor);
-    else if (vid) qs.set("fromVendor", vid); // 기본은 해당 vendor로
-
+    else if (receipt.vendor_id) qs.set("fromVendor", receipt.vendor_id);
     router.push(`/receipts/new?${qs.toString()}`);
   };
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 8 }}>
-      {/* Header */}
+    <div style={{ margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
         <button
           type="button"
           onClick={onBack}
-          style={{
-            padding: "8px 10px",
-            borderRadius: 12,
-            border: "1px solid #ddd",
-            fontWeight: 900,
-            fontSize: 13,
-            background: "white",
-          }}
+          style={{ padding: "8px 10px", borderRadius: 12, border: "1px solid #ddd", fontWeight: 900, fontSize: 13, background: "white" }}
         >
           ←
         </button>
@@ -295,57 +259,34 @@ export default function ReceiptDetailPage() {
         </button>
       </div>
 
-      {loading ? (
-        <div style={{ padding: 16, fontSize: 13, opacity: 0.7, fontWeight: 800 }}>불러오는 중…</div>
-      ) : null}
+      {loading ? <div style={{ padding: 16, fontSize: 13, opacity: 0.7, fontWeight: 800 }}>불러오는 중…</div> : null}
 
-      {msg ? (
-        <div style={{ padding: 16, fontSize: 13, opacity: 0.85, whiteSpace: "pre-wrap", textAlign: "center" }}>
-          {msg}
-        </div>
-      ) : null}
+      {msg ? <div style={{ padding: 16, fontSize: 13, opacity: 0.85, whiteSpace: "pre-wrap", textAlign: "center" }}>{msg}</div> : null}
 
       {!loading && receipt ? (
         <div style={{ marginTop: 10, display: "grid", gap: 12 }}>
-          {/* Vendor summary */}
           <div style={cardStyle}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               <span style={{ flexShrink: 0 }}>{vendor ? capabilityDot(vendor.invoice_capability) : "🔘"}</span>
-              <div
-                style={{
-                  fontWeight: 900,
-                  fontSize: 16,
-                  minWidth: 0,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <div style={{ fontWeight: 900, fontSize: 16, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {vendor?.name ?? "상가"}
               </div>
-              {vendor?.stall_no ? (
-                <span style={{ fontWeight: 700, color: "#777", flexShrink: 0 }}>
-                  {formatStallNo(vendor.stall_no)}
-                </span>
-              ) : null}
-              {vendor?.market_name ? (
-                <span style={{ marginLeft: "auto", flexShrink: 0, ...marketBadgeStyle }}>[{vendor.market_name}]</span>
-              ) : null}
+              {vendor?.stall_no ? <span style={{ fontWeight: 700, color: "#777", flexShrink: 0 }}>{formatStallNo(vendor.stall_no)}</span> : null}
+              {vendor?.market_name ? <span style={{ marginLeft: "auto", flexShrink: 0, ...marketBadgeStyle }}>[{vendor.market_name}]</span> : null}
             </div>
           </div>
 
-          {/* Images grid (up to 3) */}
           <div style={cardStyle}>
-            <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>영수증 사진</div>
+            <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginLeft: 5 }}>영수증 사진</div>
 
             {signedUrls.length === 0 ? (
               <div style={{ fontSize: 13, opacity: 0.7 }}>사진이 없습니다.</div>
             ) : (
               <div style={{ display: "flex", gap: 8 }}>
-                {signedUrls.map((it) => (
+                {signedUrls.map((it, idx) => (
                   <div key={it.sort_order} style={{ width: "33.3333%" }}>
                     <div
-                      onClick={() => setLightboxUrl(it.url)}
+                      onClick={() => setLightboxOpen({ startIndex: idx })}
                       style={{
                         width: "100%",
                         aspectRatio: "1 / 1",
@@ -356,123 +297,39 @@ export default function ReceiptDetailPage() {
                         cursor: "pointer",
                       }}
                     >
-                      <img
-                        src={it.url}
-                        alt={`영수증 ${it.sort_order}`}
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      />
+                      <img src={it.url} alt={`영수증 ${it.sort_order}`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                     </div>
                   </div>
                 ))}
-
-                {/* 빈 슬롯을 placeholder로 맞춰서 레이아웃 균일하게 */}
-                {signedUrls.length < 3
-                  ? Array.from({ length: 3 - signedUrls.length }).map((_, idx) => (
-                      <div key={`empty-${idx}`} style={{ width: "33.3333%" }}>
-                        <div
-                          style={{
-                            width: "100%",
-                            aspectRatio: "1 / 1",
-                            borderRadius: 14,
-                            border: "1px dashed #ddd",
-                            background: "#fafafa",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontWeight: 900,
-                            opacity: 0.25,
-                          }}
-                        >
-                          +
-                        </div>
-                      </div>
-                    ))
-                  : null}
               </div>
             )}
 
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.65 }}>
-              탭하면 크게 볼 수 있어
-            </div>
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>클릭시 상세 보기</div>
           </div>
 
-          {/* Details */}
           <div style={cardStyle}>
-            <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 15, marginLeft: 5 }}>
               <Row label="구매일" value={receipt.receipt_date ?? "-"} />
               <Row label="금액" value={`${formatWon(receipt.amount)}원`} />
               <Row label="지급" value={paymentLabel(receipt.payment_method)} />
-              {receipt.payment_method === "transfer" ? (
-                <Row label="입금일" value={receipt.deposit_date ?? "-"} />
-              ) : null}
+              {receipt.payment_method === "transfer" ? <Row label="입금일" value={receipt.deposit_date ?? "-"} /> : null}
               <Row label="유형" value={receipt.receipt_type === "simple" ? "간이" : "일반"} />
               <Row label="상태" value={statusLabel(receipt.status)} />
               <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 12, alignItems: "start" }}>
                 <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 2 }}>메모</div>
-                <div style={{ fontSize: 14, opacity: 0.9, whiteSpace: "pre-wrap" }}>
-                  {receipt.memo?.trim() ? receipt.memo : "-"}
-                </div>
+                <div style={{ fontSize: 14, opacity: 0.9, whiteSpace: "pre-wrap" }}>{receipt.memo?.trim() ? receipt.memo : "-"}</div>
               </div>
             </div>
           </div>
         </div>
       ) : null}
 
-      {/* Lightbox */}
-      {lightboxUrl ? (
-        <div
-          onClick={() => setLightboxUrl(null)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.85)",
-            zIndex: 9999,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 14,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "100%",
-              maxWidth: 520,
-              borderRadius: 14,
-              overflow: "hidden",
-              background: "#000",
-              border: "1px solid rgba(255,255,255,0.12)",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", padding: 10 }}>
-              <div style={{ color: "white", fontWeight: 900, fontSize: 13, opacity: 0.9 }}>
-                미리보기
-              </div>
-              <button
-                type="button"
-                onClick={() => setLightboxUrl(null)}
-                style={{
-                  marginLeft: "auto",
-                  background: "transparent",
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  color: "white",
-                  fontWeight: 900,
-                  borderRadius: 10,
-                  padding: "6px 10px",
-                  cursor: "pointer",
-                }}
-              >
-                닫기
-              </button>
-            </div>
-            <img
-              src={lightboxUrl}
-              alt="영수증 확대"
-              style={{ width: "100%", height: "auto", display: "block" }}
-            />
-          </div>
-        </div>
-      ) : null}
+      {/* ✅ Lightbox는 return 내부 맨 아래 */}
+      <ReceiptLightbox
+        urls={signedUrls.map((x) => x.url)}
+        startIndex={lightboxOpen?.startIndex ?? -1}
+        onClose={() => setLightboxOpen(null)}
+      />
     </div>
   );
 }

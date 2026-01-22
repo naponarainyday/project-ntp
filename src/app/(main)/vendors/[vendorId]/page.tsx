@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { ChevronDown } from "lucide-react";
+import ReceiptLightbox from "@/components/ReceiptLightbox"
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer" | "payable";
@@ -36,7 +37,7 @@ type ReceiptImageLite = {
   sort_order: number; // 1~3
 };
 
-const STATUS_ORDER: ReceiptStatus[] = ["needs_fix", "requested", "uploaded", "completed"];
+const STATUS_ORDER: ReceiptStatus[] = ["needs_fix", "uploaded", "requested", "completed"];
 
 function statusLabel(s: ReceiptStatus) {
   switch (s) {
@@ -84,9 +85,9 @@ function capabilityDot(cap: VendorInfo["invoice_capability"]) {
 
 function statusButtonStyle(s: ReceiptStatus) {
   if (s === "uploaded") return { border: "#000936", bg: "#FFFFFF", text: "#000000" };
-  if (s === "requested") return { border: "#16A34A", bg: "#FFFFFF", text: "#01240E" };
-  if (s === "needs_fix") return { border: "#F59E0B", bg: "#FFFFFF", text: "#92400E" };
-  return { border: "#9CA3AF", bg: "#F3F3F3", text: "#374151" };
+  if (s === "requested") return { border: "#16A34A", bg: "#c9ffcf", text: "#001709" };
+  if (s === "needs_fix") return { border: "#ff3300", bg: "#fff2f2", text: "#351400" };
+  return { border: "#9CA3AF", bg: "#eae9e9", text: "#050608" };
 }
 
 function parseDateKey(r: ReceiptRow) {
@@ -153,8 +154,8 @@ function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
 }
 
 export default function VendorReceiptsPage() {
-  const params = useParams<{ vendorId: string }>();
-  const vendorId = params.vendorId;
+  const params = useParams<{ vendorId: string | string[] }>();
+  const vendorId = Array.isArray(params.vendorId) ? params.vendorId[0] : params.vendorId;
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -176,22 +177,36 @@ export default function VendorReceiptsPage() {
   // 변경: 3장 배열로 저장
   const [imgUrlsById, setImgUrlsById] = useState<Record<string, Array<string | null>>>({});
 
-  // 라이트박스(크게 보기)
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [viewerUrls, setViewerUrls] = useState<Array<string>>([]);
-  const [viewerIndex, setViewerIndex] = useState(0);
+  // ✅ 같은 row에 대해 createSignedUrl 중복 호출 방지 (로딩 무한 방지 핵심)
+  const signingIdsRef = useRef<Set<string>>(new Set());
 
+  // lightbox
+  const [lightboxOpen, setLightboxOpen] = useState<{
+  urls: string[];
+  startIndex: number;
+} | null>(null);
 
   // selection + bulk
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [isStatusDrawerOpen, setIsStatusDrawerOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<ReceiptStatus | null>(null);
 
-  const selectedStatus = useMemo<ReceiptStatus | null>(() => {
-    if (selectedIds.size === 0) return null;
-    const first = rows.find((r) => selectedIds.has(r.id));
-    return first?.status ?? null;
-  }, [selectedIds, rows]);
+  const selectedRows = useMemo(() => {
+    if (selectedIds.size === 0) return [];
+    return rows.filter((r) => selectedIds.has(r.id));
+  }, [rows, selectedIds]);
+
+  const uniformSelectedStatus = useMemo<ReceiptStatus | null>(() => {
+    if (selectedRows.length === 0) return null;
+    const s = selectedRows[0].status;
+    for (const r of selectedRows) if (r.status !== s) return null;
+    return s;
+  }, [selectedRows]);
+
+  const canOpenStatusDrawer = useMemo(() => {
+    return selectedRows.length > 0 && !!uniformSelectedStatus;
+  }, [selectedRows.length, uniformSelectedStatus]);
 
   useEffect(() => {
     (async () => {
@@ -226,7 +241,12 @@ export default function VendorReceiptsPage() {
           .order("created_at", { ascending: false });
 
         if (rErr) throw rErr;
-        setRows((r ?? []) as ReceiptRow[]);
+        setRows(
+          ((r ?? []) as ReceiptRow[]).map((x) => ({
+            ...x,
+            receipt_images: (x.receipt_images ?? []) as any,
+          }))
+        );
       } catch (e: any) {
         console.log("VENDOR RECEIPTS LOAD ERROR:", e);
         setMsg(e?.message ?? "불러오기 실패");
@@ -274,7 +294,6 @@ export default function VendorReceiptsPage() {
     });
   };
 
-
   const filtered = useMemo(() => {
     let list = rows.slice();
 
@@ -297,11 +316,48 @@ export default function VendorReceiptsPage() {
     return list;
   }, [rows, period, customFrom, customTo, statusFilter, paymentFilter]);
 
+  const allFilteredIds = useMemo(() => filtered.map((r) => r.id), [filtered]);
+
+  const allChecked = useMemo(() => {
+    if (allFilteredIds.length === 0) return false;
+    return allFilteredIds.every((id) => selectedIds.has(id));
+  }, [allFilteredIds, selectedIds]);
+
+  const toggleSelectAllFiltered = () => {
+    setMsg("");
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allChecked) {
+        allFilteredIds.forEach((id) => next.delete(id));
+      } else {
+        allFilteredIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const selectedTotal = useMemo(() => {
+    return selectedRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  }, [selectedRows]);
+
+  const selectedStatusText = useMemo(() => {
+    if (selectedRows.length === 0) return null;
+    const s0 = selectedRows[0].status;
+    for (const r of selectedRows) {
+      if (r.status !== s0) return "혼합";
+    }
+    return statusLabel(s0);
+  }, [selectedRows]);
+
   const grouped = useMemo(() => {
     const map = new Map<ReceiptStatus, ReceiptRow[]>();
     for (const s of STATUS_ORDER) map.set(s, []);
     for (const r of filtered) map.get(r.status)?.push(r);
     return map;
+  }, [filtered]);
+
+ const filteredTotal = useMemo(() => {
+    return filtered.reduce((sum, r) => sum + Number(r.amount || 0), 0);
   }, [filtered]);
 
   const clearSelection = () => {
@@ -315,41 +371,17 @@ export default function VendorReceiptsPage() {
       const next = new Set(prev);
       const isSelected = next.has(r.id);
 
-      if (isSelected) {
-        next.delete(r.id);
-        return next;
-      }
+      if (isSelected) next.delete(r.id);
+      else next.add(r.id);
 
-      // ✅ 같은 status만 묶어서 선택
-      if (next.size > 0) {
-        const firstId = Array.from(next)[0];
-        const first = rows.find((x) => x.id === firstId);
-        if (first && first.status !== r.status) {
-          setMsg("같은 상태의 건만 함께 선택할 수 있어요.");
-          return next;
-        }
-      }
-
-      next.add(r.id);
       return next;
     });
   };
 
-  const canShowBulkDrawer = useMemo(() => {
-    if (selectedIds.size === 0) return false;
-    if (!selectedStatus) return false;
-
-    for (const id of selectedIds) {
-      const rr = rows.find((x) => x.id === id);
-      if (!rr) continue;
-      if (rr.status !== selectedStatus) return false;
-    }
-    return true;
-  }, [selectedIds, selectedStatus, rows]);
-
   const bulkUpdateStatus = async (newStatus: ReceiptStatus) => {
-    if (!selectedStatus) return;
-    if (newStatus === selectedStatus) return;
+    if (selectedIds.size ===0) return;
+    if (!uniformSelectedStatus) return;
+    if (newStatus === uniformSelectedStatus) return;
 
     setMsg("");
     setBulkUpdating(true);
@@ -360,6 +392,7 @@ export default function VendorReceiptsPage() {
       if (error) throw error;
 
       setRows((prev) => prev.map((r) => (selectedIds.has(r.id) ? { ...r, status: newStatus } : r)));
+      setIsStatusDrawerOpen(false);
       clearSelection();
     } catch (e: any) {
       console.log("BULK UPDATE ERROR:", e);
@@ -369,41 +402,75 @@ export default function VendorReceiptsPage() {
     }
   };
 
-  const ensureSignedUrls = async (row: ReceiptRow) => {
-  if (imgUrlsById[row.id]) return;
+    const ensureSignedUrls = async (row: ReceiptRow) => {
+    const id = row.id;
 
-  // receipt_images 우선, 없으면 image_path를 1번 슬롯으로 fallback
-  const paths3: Array<string | null> = [null, null, null];
+    // 이미 값이 있으면 끝 (null 3개라도 값이 있으면 "로딩중"이 안 뜸)
+    if (imgUrlsById[id]) return;
 
-  const imgs = (row.receipt_images ?? []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  for (const it of imgs) {
-    const so = Number(it.sort_order);
-    if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
-  }
+    // ✅ 이미 요청 중이면 중복 요청 방지
+    if (signingIdsRef.current.has(id)) return;
+    signingIdsRef.current.add(id);
 
-  if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+    // ✅ 로딩 상태를 먼저 박아둔다 (이게 "무한 로딩"을 끊는 핵심)
+    setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
 
-  const signed = await Promise.all(
-    paths3.map(async (p) => {
-      if (!p) return null;
-      const { data, error } = await supabase.storage.from("receipts").createSignedUrl(p, 60 * 30);
-      if (error) return null;
-      return data?.signedUrl ?? null;
-    })
-  );
+    try {
+      // receipt_images 우선, 없으면 image_path를 1번 슬롯으로 fallback
+      const paths3: Array<string | null> = [null, null, null];
 
-  setImgUrlsById((prev) => ({ ...prev, [row.id]: signed }));
-};
+      const imgs = (row.receipt_images ?? [])
+        .slice()
+        .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 
+      for (const it of imgs) {
+        const so = Number(it.sort_order);
+        if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
+      }
+
+      if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+
+      const signed = await Promise.all(
+        paths3.map(async (p) => {
+          if (!p) return null;
+
+          const { data, error } = await supabase.storage
+            .from("receipts")
+            .createSignedUrl(p, 60 * 30);
+
+          if (error) {
+            console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
+            return null;
+          }
+          return data?.signedUrl ?? null;
+        })
+      );
+
+      // ✅ 성공/실패 상관없이 결과를 확정 set (null이어도 OK)
+      setImgUrlsById((prev) => ({ ...prev, [id]: signed }));
+    } catch (e) {
+      console.log("ensureSignedUrls failed:", e);
+      // ✅ 실패해도 "로딩중"에서 빠져나오게 확정 set
+      setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+    } finally {
+      signingIdsRef.current.delete(id);
+    }
+  };
 
   const toggleExpand = async (row: ReceiptRow) => {
+    let willOpen = false;
+
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(row.id)) next.delete(row.id);
-      else next.add(row.id);
+      else {
+        next.add(row.id);
+        willOpen = true;
+      }
       return next;
     });
-    await ensureSignedUrls(row);
+
+    if (willOpen) await ensureSignedUrls(row);
   };
 
   // ✅ 홈과 같은 헤더 구성요소 (각각 스타일 따로)
@@ -412,17 +479,46 @@ export default function VendorReceiptsPage() {
   const capDot = capabilityDot(vendor?.invoice_capability ?? "not_supported");
 
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: 6, paddingBottom: 90 }}>
+    <div style={{ margin: "0 auto", paddingBottom: 190 }}>
+
+      {/* 상단 CTA */}
+      <button
+        onClick={() => router.push(`/vendors/${vendorId}/receipts/new`)}
+        style={{
+          width: "100%",
+          marginTop: 0,
+          padding: "12px 12px",
+          borderRadius: 12,
+          border: "1px solid #ddd",
+          background: "#f3f3f3",
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: "pointer",
+        }}
+      >
+        + 새 영수증 등록하기
+      </button>
+
       {/* ===== Header (홈 스타일로 분리) ===== */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
           gap: 10,
-          padding: "2px 2px 2px",
           borderBottom: "1px solid #adadad",
         }}
       >
+        {/* ✅ 전체 선택 (현재 선택 가능한 섹션 기준) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={allChecked}
+            onChange={toggleSelectAllFiltered}
+            style={{ width: 18, height: 18, cursor: "pointer" }}
+            aria-label="전체 선택"
+          />
+        </div>
+        
         {/* [market] */}
         <span style={{ fontSize: 12, opacity: 0.75, minWidth: 52 }}>[{marketName}]</span>
 
@@ -475,7 +571,7 @@ export default function VendorReceiptsPage() {
         <button
           type="button"
           onClick={() => {
-            if (canShowBulkDrawer) clearSelection();
+            setIsStatusDrawerOpen(false);
             setIsFilterOpen(true);
           }}
           style={{
@@ -488,6 +584,7 @@ export default function VendorReceiptsPage() {
             gap: 4,
             cursor: "pointer",
             whiteSpace: "nowrap",
+            marginTop: 5
           }}
           aria-label="필터"
           >
@@ -507,6 +604,7 @@ export default function VendorReceiptsPage() {
           </button>
       </div>
 
+
       {msg ? <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9, whiteSpace: "pre-wrap" }}>{msg}</div> : null}
 
       {/* ===== Body ===== */}
@@ -524,28 +622,69 @@ export default function VendorReceiptsPage() {
 
             return (
               <div key={s} style={{ marginTop: 10 }}>
-                {/* ✅ 섹션 헤더: 홈처럼 (count + label) 한 박스 */}
-                <div style={{ display: "flex", alignItems: "center", padding: "1px 0px" }}>
-                  <span
-                    style={{
-                      fontSize: 12,
-                      padding: "4px 8px",
-                      borderRadius: 8,
-                      border: `1px solid ${st.border}`,
-                      background: st.bg,
-                      color: st.text,
-                      whiteSpace: "nowrap",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      fontWeight: 900,
-                    }}
-                    title={s}
-                  >
-                    <span style={{ opacity: 0.85 }}>({formatCount(list.length)})</span>
-                    <span>{statusLabel(s)}</span>
-                  </span>
-                </div>
+            {/* ✅ 섹션 헤더: status별 전체 선택 체크박스 추가 */}
+            <div style={{ display: "flex", alignItems: "center", padding: "1px 0px", gap: 8 }}>
+            {(() => {
+              const groupIds = list.map((x) => x.id);
+
+              const selectedCount = groupIds.reduce((acc, id) => acc + (selectedIds.has(id) ? 1 : 0), 0);
+              const allSelected = groupIds.length > 0 && selectedCount === groupIds.length;
+              const someSelected = selectedCount > 0 && !allSelected;
+
+              const toggleGroup = () => {
+                setMsg("");
+                setSelectedIds((prev) => {
+                  const next = new Set(prev);
+
+                  if (allSelected) {
+                    // ✅ 전부 선택된 상태면 이 그룹만 전부 해제
+                    groupIds.forEach((id) => next.delete(id));
+                  } else {
+                    // ✅ 미선택/부분선택이면 이 그룹 전부 추가 선택(기존 선택 유지)
+                    groupIds.forEach((id) => next.add(id));
+                  }
+
+                  return next;
+                });
+                setPendingStatus(null);
+              };
+
+              return (
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (!el) return;
+                    el.indeterminate = someSelected; // ✅ 일부 선택이면 회색(대시) 상태
+                  }}
+                  onChange={toggleGroup}
+                  style={{ width: 18, height: 18, cursor: groupIds.length ? "pointer" : "not-allowed" }}
+                  disabled={groupIds.length === 0}
+                  aria-label={`${statusLabel(s)} 전체 선택`}
+                />
+              );
+            })()}
+
+            <span
+              style={{
+                fontSize: 12,
+                padding: "4px 8px",
+                borderRadius: 8,
+                border: `1px solid ${st.border}`,
+                background: st.bg,
+                color: st.text,
+                whiteSpace: "nowrap",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontWeight: 900,
+              }}
+              title={s}
+            >
+              <span style={{ opacity: 0.85 }}>({formatCount(list.length)})</span>
+              <span>{statusLabel(s)}</span>
+            </span>
+          </div>
 
                 {/* list */}
                 <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
@@ -610,7 +749,7 @@ export default function VendorReceiptsPage() {
                                 ) : (
                                   <div style={{ flex: 1}} />
                                 )}  
-                                <div style={{ fontSize: 12, color: "#898b8e", fontWeight: 500, flexShrink: 0 }}>
+                                <div style={{ fontSize: 12, opacity: 0.8 }}>
                                   {paymentLabel(r.payment_method)}
                                 </div>
                               </div>
@@ -636,17 +775,15 @@ export default function VendorReceiptsPage() {
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      const all = imgUrlsById[r.id] ?? [];
-                                      const valid = all.filter((x): x is string => !!x);
-                                      if (valid.length === 0) return;
+                                      if (!u) return;
+                                      const urls = (imgUrlsById[r.id] ?? []).filter(
+                                        (x): x is string => typeof x === "string"
+                                      );
 
-                                      // ✅ 클릭한 썸네일이 valid에서 몇번째인지 계산(중간 null 제거했으니까)
-                                      const clickedUrl = u ?? null;
-                                      const startIdx = clickedUrl ? Math.max(0, valid.indexOf(clickedUrl)) : 0;
-
-                                      setViewerUrls(valid);
-                                      setViewerIndex(startIdx);
-                                      setViewerOpen(true);
+                                      setLightboxOpen({
+                                        urls,
+                                        startIndex: idx,
+                                      });
                                     }}
                                     style={{
                                       border: "1px solid #eee",
@@ -665,17 +802,14 @@ export default function VendorReceiptsPage() {
                                       <img
                                         src={u}
                                         alt={`영수증 ${idx + 1}`}
-                                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
                                       />
                                     ) : (
                                       <div
                                         style={{
-                                          width: "100%",
-                                          height: "100%",
                                           display: "grid",
                                           placeItems: "center",
                                           fontSize: 12,
-                                          opacity: 0.7,
                                         }}
                                       >
                                         없음
@@ -704,8 +838,7 @@ export default function VendorReceiptsPage() {
                               {/* memo */}
                               <div
                                 style={{
-                                  fontSize: 12,
-                                  color: "#374151",
+                                  fontSize: 14,
                                   whiteSpace: "pre-wrap",
                                   wordBreak: "break-word",
                                   minHeight: 44,
@@ -748,6 +881,176 @@ export default function VendorReceiptsPage() {
           })}
         </div>
       )}
+
+              {/* ✅ 선택 합계 + 상태 변경 안내 (합계바 위) */}
+              {selectedIds.size > 0 ? (
+                <div
+                  style={{
+                    position: "fixed",
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    width: "100%",
+                    maxWidth: 448,
+                    bottom: 66 + 47, // 합계바 위
+                    zIndex: 31,
+                    background: "#fafafa",
+                    borderTop: "1px solid #bbbbbb",
+                    padding: "6px 12px",
+                  }}
+                >
+                  <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>
+                    (선택 합계 {formatMoney(selectedTotal)}원)
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingStatus(uniformSelectedStatus);
+                        setIsStatusDrawerOpen(true);
+                      }}
+                      disabled={!canOpenStatusDrawer}
+                      style={{
+                        marginLeft: "auto",
+                        border: "1px solid #0B1F5B",
+                        background: canOpenStatusDrawer ? "#0B1F5B" : "#E5E7EB",
+                        color: canOpenStatusDrawer ? "#fff" : "#6B7280",
+                        borderRadius: 10,
+                        padding: "4px 10px",
+                        fontSize: 13,
+                        cursor: canOpenStatusDrawer ? "pointer" : "not-allowed",
+                      }}
+                      title={!canOpenStatusDrawer ? "같은 상태만 선택했을 때 변경 가능" : ""}
+                    >
+                      상태 변경
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ✅ 하단 고정: 필터된 전체 합계 */}
+              <div
+                style={{
+                  position: "fixed",
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  width: "100%",
+                  maxWidth: 448,
+                  bottom: 65,
+                  zIndex: 30,
+                  background: "#efefef",
+                  borderTop: "1px solid #242424",
+                  padding: "10px 12px",
+                }}
+              >
+                <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center" }}>
+                  <div style={{ fontSize: 18, fontWeight: 900, marginLeft: "auto" }}>
+                    합계&nbsp;&nbsp;{formatMoney(filteredTotal)}원
+                  </div>
+                </div>
+              </div>
+
+      {/* Status Drawer */}
+      {isStatusDrawerOpen ? (
+        <>
+          <div
+            onClick={() => {
+              setIsStatusDrawerOpen(false);
+              setPendingStatus(null);
+            }}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.25)", zIndex: 70 }}
+          />
+
+          <div
+            style={{
+              position: "fixed",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 80,
+              background: "#fff",
+              borderTopLeftRadius: 18,
+              borderTopRightRadius: 18,
+              padding: 16,
+              boxShadow: "0 -10px 30px rgba(0,0,0,0.12)",
+              maxWidth: 420,
+              margin: "0 auto",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 900 }}>
+                {selectedRows.length}개 · 현재 {uniformSelectedStatus ? statusLabel(uniformSelectedStatus) : "-"}
+              </div>
+
+              <button
+                onClick={() => {
+                  if (!pendingStatus) return;
+                  bulkUpdateStatus(pendingStatus);
+                }}
+                disabled={
+                  !pendingStatus ||
+                  bulkUpdating ||
+                  !uniformSelectedStatus ||
+                  pendingStatus === uniformSelectedStatus
+                }
+                style={{
+                  marginLeft: "auto",
+                  border: "none",
+                  background: "transparent",
+                  fontSize: 14,
+                  fontWeight: 900,
+                  cursor:
+                    !pendingStatus ||
+                    bulkUpdating ||
+                    !uniformSelectedStatus ||
+                    pendingStatus === uniformSelectedStatus
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !pendingStatus ||
+                    bulkUpdating ||
+                    !uniformSelectedStatus ||
+                    pendingStatus === uniformSelectedStatus
+                      ? 0.35
+                      : 1,
+                }}
+              >
+                확인
+              </button>
+            </div>
+
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+              {(["uploaded", "requested", "needs_fix", "completed"] as ReceiptStatus[]).map((s) => {
+                const st = statusButtonStyle(s);
+                const disabled = !uniformSelectedStatus || bulkUpdating || s === uniformSelectedStatus;
+
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setPendingStatus(s)}
+                    disabled={!uniformSelectedStatus || bulkUpdating}
+                    style={{
+                      padding: "10px 8px",
+                      borderRadius: 12,
+                      border: `2px solid ${pendingStatus === s ? st.border : "#E5E7EB"}`,
+                      background: "#fff",
+                      color: st.text,
+                      fontSize: 13,
+                      fontWeight: 900,
+                      cursor: disabled ? "not-allowed" : "pointer",
+                      opacity: disabled ? 0.4 : 1,
+                    }}
+                  >
+                    {statusLabel(s)}
+                  </button>
+                );
+              })}
+            </div>
+
+            {bulkUpdating ? <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>상태 변경 중…</div> : null}
+          </div>
+        </>
+      ) : null}
 
       {/* =========================
           Filter Drawer (Bottom Sheet)
@@ -801,6 +1104,7 @@ export default function VendorReceiptsPage() {
                         background: active ? "#E5E7EB" : "#F3F4F6",
                         fontSize: 13,
                         cursor: "pointer",
+                        fontWeight: active ? 900 : undefined
                       }}
                     >
                       {periodLabel(p)}
@@ -834,7 +1138,7 @@ export default function VendorReceiptsPage() {
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                {(STATUS_ORDER as ReceiptStatus[]).map((s) => {
+                {(["uploaded", "requested", "needs_fix", "completed"] as ReceiptStatus[]).map((s) => {
                   const active = statusFilter.has(s);
                   const st = statusButtonStyle(s);
                   return (
@@ -849,7 +1153,7 @@ export default function VendorReceiptsPage() {
                         color: active ? st.text : "#111827",
                         fontSize: 13,
                         cursor: "pointer",
-                        fontWeight: active ? 900 : 800,
+                        fontWeight: active ? 900 : undefined,
                       }}
                     >
                       {statusLabel(s)}
@@ -858,29 +1162,47 @@ export default function VendorReceiptsPage() {
                 })}
               </div>
 
-              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button
-                  onClick={() => setStatusFilter(new Set())}
-                  style={{
-                    flex: 1,
-                    padding: 10,
-                    borderRadius: 12,
-                    border: "1px solid #E5E7EB",
-                    background: "#F9FAFB",
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 700,
-                  }}
-                >
-                  상태 전체
-                </button>
 
+            </div>
+            {/* payment filter */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9, marginBottom: 8 }}>
+                지급구분 <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.65 }}>(미선택=전체)</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                {(["cash", "transfer", "payable"] as PaymentMethod[]).map((pm) => {
+                  const active = paymentFilter.has(pm);
+
+                  return (
+                    <button
+                      key={pm}
+                      onClick={() => togglePaymentFilter(pm)}
+                      style={{
+                        padding: "10px 8px",
+                        borderRadius: 10,
+                        border: `2px solid ${active ? "#111827" : "#E5E7EB"}`,
+                        background: "#FFFFFF",
+                        color: "#111827",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontWeight: active ? 900 : undefined,
+                      }}
+                    >
+                      {paymentLabel(pm)}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
                 <button
                   onClick={() => {
                     setPeriod("this_month");
                     setCustomFrom("");
                     setCustomTo("");
                     setStatusFilter(new Set());
+                    setPaymentFilter(new Set());
                   }}
                   style={{
                     flex: 1,
@@ -901,209 +1223,11 @@ export default function VendorReceiptsPage() {
         </>
       ) : null}
 
-      {/* =========================
-          Bulk Status Drawer (Sticky)
-          ========================= */}
-      {canShowBulkDrawer ? (
-        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 40, padding: 12, background: "#FFFFFF", borderTop: "1px solid #E5E7EB" }}>
-          <div style={{ maxWidth: 420, margin: "0 auto" }}>
-            <div style={{ display: "flex", alignItems: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 800 }}>
-                {selectedIds.size}개 선택됨 · 현재 {selectedStatus ? statusLabel(selectedStatus) : "-"}
-                {pendingStatus && pendingStatus !== selectedStatus ? (
-                  <span style={{ marginLeft: 8, fontWeight: 800, opacity: 0.8 }}>→ {statusLabel(pendingStatus)}</span>
-                ) : null}
-              </div>
-
-              <button
-                onClick={() => {
-                  if (!pendingStatus) return;
-                  bulkUpdateStatus(pendingStatus);
-                  setPendingStatus(null);
-                }}
-                disabled={!pendingStatus || bulkUpdating || pendingStatus === selectedStatus}
-                style={{
-                  marginLeft: "auto",
-                  border: "none",
-                  background: "transparent",
-                  padding: "6px 8px",
-                  fontSize: 13,
-                  fontWeight: 900,
-                  cursor: !pendingStatus || bulkUpdating || pendingStatus === selectedStatus ? "not-allowed" : "pointer",
-                  opacity: !pendingStatus || bulkUpdating || pendingStatus === selectedStatus ? 0.35 : 0.95,
-                }}
-              >
-                확인
-              </button>
-            </div>
-
-            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-              {(STATUS_ORDER as ReceiptStatus[]).map((s) => {
-                const st = statusButtonStyle(s);
-                const isDisabled = s === selectedStatus || bulkUpdating;
-                const isPicked = pendingStatus === s;
-
-                const pickedBg = s === "completed" ? "#E9ECEF" : `color-mix(in srgb, ${st.border} 14%, white)`;
-
-                return (
-                  <button
-                    key={s}
-                    onClick={() => setPendingStatus(s)}
-                    disabled={isDisabled}
-                    style={{
-                      padding: "10px 8px",
-                      borderRadius: 12,
-                      border: `${isPicked ? 2 : 1}px solid ${st.border}`,
-                      background: isPicked ? pickedBg : "#FFFFFF",
-                      color: st.text,
-                      fontSize: 13,
-                      fontWeight: isPicked ? 900 : 800,
-                      cursor: isDisabled ? "not-allowed" : "pointer",
-                      opacity: isDisabled ? 0.5 : 1,
-                      boxShadow: isPicked ? `0 0 0 2px rgba(0,0,0,0.04)` : "none",
-                      transform: isPicked ? "translateY(-1px)" : "none",
-                      transition: "all 120ms ease",
-                    }}
-                  >
-                    {statusLabel(s)}
-                  </button>
-                );
-              })}
-            </div>
-
-            {bulkUpdating ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>상태 변경 중…</div> : null}
-          </div>
-        </div>
-      ) : null}
-
-{viewerOpen ? (
-  <>
-    {/* dim */}
-    <div
-      onClick={() => setViewerOpen(false)}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.65)",
-        zIndex: 999,
-      }}
-    />
-
-    {/* modal */}
-    <div
-      onClick={() => setViewerOpen(false)}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          borderRadius: 16,
-          overflow: "hidden",
-          background: "#111",
-          border: "1px solid rgba(255,255,255,0.12)",
-        }}
-      >
-        {/* header */}
-        <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", color: "#fff" }}>
-          <div style={{ fontSize: 13, fontWeight: 900 }}>영수증 이미지</div>
-          <div style={{ marginLeft: 10, fontSize: 12, opacity: 0.75 }}>
-            {viewerIndex + 1} / {viewerUrls.filter(Boolean).length || 1}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setViewerOpen(false)}
-            style={{
-              marginLeft: "auto",
-              border: "none",
-              background: "transparent",
-              color: "#fff",
-              fontSize: 18,
-              cursor: "pointer",
-              fontWeight: 900,
-            }}
-            aria-label="닫기"
-          >
-            ×
-          </button>
-        </div>
-
-        {/* big image */}
-        <div style={{ background: "#000" }}>
-          {viewerUrls[viewerIndex] ? (
-            <img
-              src={viewerUrls[viewerIndex] as string}
-              alt={`영수증 크게보기 ${viewerIndex + 1}`}
-              style={{
-                width: "100%",
-                maxHeight: "75vh",
-                objectFit: "contain",
-                display: "block",
-              }}
-            />
-          ) : (
-            <div style={{ color: "#fff", padding: 24, fontSize: 13, opacity: 0.8 }}>
-              이미지가 없습니다.
-            </div>
-          )}
-        </div>
-
-        {/* thumbs */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 8,
-            padding: 10,
-            background: "#0b0b0b",
-          }}
-        >
-          {viewerUrls.map((u, idx) => (
-            <button
-              key={idx}
-              type="button"
-              disabled={!u}
-              onClick={() => setViewerIndex(idx)}
-              style={{
-                borderRadius: 12,
-                border: idx === viewerIndex ? "2px solid rgba(255,255,255,0.9)" : "1px solid rgba(255,255,255,0.18)",
-                background: "transparent",
-                padding: 0,
-                overflow: "hidden",
-                aspectRatio: "1 / 1",
-                cursor: u ? "pointer" : "not-allowed",
-                opacity: u ? 1 : 0.25,
-              }}
-              aria-label={`썸네일 ${idx + 1}`}
-              title={u ? "이 이미지로 보기" : ""}
-            >
-              {u ? (
-                <img
-                  src={u}
-                  alt={`thumb ${idx + 1}`}
-                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                />
-              ) : (
-                <div style={{ width: "100%", height: "100%" }} />
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  </>
-) : null}
-
+      <ReceiptLightbox
+        urls={lightboxOpen?.urls ?? []}
+        startIndex={lightboxOpen?.startIndex ?? -1}
+        onClose={() => setLightboxOpen(null)}
+      />
     </div>
   );
 }
