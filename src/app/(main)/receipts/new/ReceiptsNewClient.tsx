@@ -75,6 +75,75 @@ function capabilityDot(invoice_capability: InvoiceCapability) {
   return invoice_capability === "supported" ? "🔴" : "🔘";
 }
 
+// ✅ 업로드 전에 모든 이미지를 webp로 변환/리사이즈
+const WEBP_MAX_SIDE = 1600;   // 긴 변 기준(원하면 1280~2048 사이로 조절)
+const WEBP_QUALITY = 0.82;    // 0~1 (0.75~0.85 권장)
+
+function getExtLower(name: string) {
+  return (name.split(".").pop() || "").toLowerCase();
+}
+
+function isHeicLike(file: File) {
+  const ext = getExtLower(file.name);
+  return file.type === "image/heic" || file.type === "image/heif" || ext === "heic" || ext === "heif";
+}
+
+async function decodeToBitmap(file: File): Promise<ImageBitmap> {
+  // HEIC/HEIF면 heic2any로 jpeg/png blob으로 변환 후 디코딩
+  let blob: Blob = file;
+
+  if (isHeicLike(file)) {
+    const heic2any = (await import("heic2any")).default;
+    const converted = await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.92,
+    });
+
+    // heic2any는 Blob 또는 Blob[]로 올 수 있음
+    blob = Array.isArray(converted) ? converted[0] : converted;
+  }
+
+  // createImageBitmap이 가장 깔끔 (대부분 브라우저 OK)
+  return await createImageBitmap(blob);
+}
+
+async function fileToWebpResized(file: File, slotIndex: number): Promise<File> {
+  const bitmap = await decodeToBitmap(file);
+
+  // 리사이즈 계산
+  const w = bitmap.width;
+  const h = bitmap.height;
+
+  const maxSide = Math.max(w, h);
+  const scale = maxSide > WEBP_MAX_SIDE ? WEBP_MAX_SIDE / maxSide : 1;
+
+  const tw = Math.max(1, Math.round(w * scale));
+  const th = Math.max(1, Math.round(h * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = tw;
+  canvas.height = th;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("이미지 변환에 실패했습니다.(canvas)");
+
+  ctx.drawImage(bitmap, 0, 0, tw, th);
+  bitmap.close?.();
+
+  const webpBlob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("이미지 변환에 실패했습니다.(toBlob)"))),
+      "image/webp",
+      WEBP_QUALITY
+    );
+  });
+
+  // 파일명은 webp로 고정
+  const safeBase = (file.name || `image_${slotIndex + 1}`).replace(/\.[^/.]+$/, "");
+  return new File([webpBlob], `${safeBase}.webp`, { type: "image/webp" });
+}
+
 export default function ReceiptsNewClient() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -92,6 +161,8 @@ export default function ReceiptsNewClient() {
   const vendorPickerWrapRef = useRef<HTMLDivElement | null>(null);
 
   // ---------- Receipt Form ----------
+  const IMAGE_ACCEPT = 
+    "image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif";
   const filePickerRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
 
@@ -123,7 +194,6 @@ export default function ReceiptsNewClient() {
 const [existingPaths, setExistingPaths] = useState<Array<string | null>>([null, null, null]);
 const [existingUrls, setExistingUrls] = useState<Array<string | null>>([null, null, null]);
 const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,null,null]);
-
 
   const effectiveStatus = useMemo<ReceiptStatus>(() => {
     return receiptType === "simple" ? "completed" : status;
@@ -355,22 +425,57 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     cameraRef.current?.click();
   }
 
-
-  function onPickFromFile(inputFiles: FileList | null) {
+  async function onPickFromFile(inputFiles: FileList | null) {
     if (!inputFiles || inputFiles.length === 0) return;
     if (sheetSlot === null) return;
-    setFileAtSlot(sheetSlot, inputFiles[0]);
+
+    const f = inputFiles[0];
     if (filePickerRef.current) filePickerRef.current.value = "";
     closeSheet();
+
+    await processPickedFile(sheetSlot, f);
   }
 
-  function onPickFromCamera(inputFiles: FileList | null) {
+  async function onPickFromCamera(inputFiles: FileList | null) {
     if (!inputFiles || inputFiles.length === 0) return;
+  
     const slot = sheetSlot ?? files.findIndex((f) => !f);
     if (slot === -1) return;
-    setFileAtSlot(slot, inputFiles[0]);
+  
+    const f  = inputFiles[0];
     if (cameraRef.current) cameraRef.current.value = "";
     closeSheet();
+
+    await processPickedFile(slot, f);
+  }
+
+  async function processPickedFile(slot: number, rawFile: File) {
+    setMsg("");
+
+    try {
+      // ✅ webp 변환/리사이즈
+      const webp = await fileToWebpResized(rawFile, slot);
+
+      // ✅ 수정모드에서 기존 이미지가 있었다면 "교체"니까 기존 슬롯 비우기
+      if (isEditMode) {
+        setExistingPaths((prev) => {
+          const next = [...prev];
+          next[slot] = null;
+          return next;
+        });
+        setExistingUrls((prev) => {
+          const next = [...prev];
+          next[slot] = null;
+          return next;
+        });
+      }
+
+      // ✅ 새 파일로 세팅 (previews는 files 기반으로 자동 생성됨)
+      setFileAtSlot(slot, webp);
+    } catch (e: any) {
+      console.error("image convert error:", e);
+      setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
+    }
   }
 
   // ---------- Save / Update ----------
@@ -433,12 +538,15 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
             const f = files[idx];
             if (!f) continue;
         
-        const ext = (f.name.split(".").pop() || "jpg").toLowerCase();
-        const path = `${userId}/${selectedVendor.id}/${ts}_${idx + 1}.${ext}`;
+        const path = `${userId}/${selectedVendor.id}/${ts}_${idx + 1}.webp`;
 
         const { error: upErr } = await supabase.storage
           .from("receipts")
-          .upload(path, f, { upsert: false });
+          .upload(path, f, { 
+            upsert: false,
+            contentType: "image/webp",
+            cacheControl: "3600",
+          });
 
         if (upErr) throw upErr;
         finalPaths[idx] = path;
@@ -778,14 +886,14 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
       <input
         ref={filePickerRef}
         type="file"
-        accept="image/*"
+        accept="IMAGE_ACCEPT"
         style={{ display: "none" }}
         onChange={(e) => onPickFromFile(e.target.files)}
       />
       <input
         ref={cameraRef}
         type="file"
-        accept="image/*"
+        accept="IMAGE_ACCEPT"
         capture="environment"
         style={{ display: "none" }}
         onChange={(e) => onPickFromCamera(e.target.files)}

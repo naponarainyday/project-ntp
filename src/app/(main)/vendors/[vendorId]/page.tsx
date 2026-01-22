@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { ChevronDown } from "lucide-react";
+import ReceiptLightbox from "@/components/ReceiptLightbox"
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer" | "payable";
@@ -176,10 +177,14 @@ export default function VendorReceiptsPage() {
   // 변경: 3장 배열로 저장
   const [imgUrlsById, setImgUrlsById] = useState<Record<string, Array<string | null>>>({});
 
-  // 라이트박스(크게 보기)
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [viewerUrls, setViewerUrls] = useState<Array<string>>([]);
-  const [viewerIndex, setViewerIndex] = useState(0);
+  // ✅ 같은 row에 대해 createSignedUrl 중복 호출 방지 (로딩 무한 방지 핵심)
+  const signingIdsRef = useRef<Set<string>>(new Set());
+
+  // lightbox
+  const [lightboxOpen, setLightboxOpen] = useState<{
+  urls: string[];
+  startIndex: number;
+} | null>(null);
 
   // selection + bulk
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -236,7 +241,12 @@ export default function VendorReceiptsPage() {
           .order("created_at", { ascending: false });
 
         if (rErr) throw rErr;
-        setRows((r ?? []) as ReceiptRow[]);
+        setRows(
+          ((r ?? []) as ReceiptRow[]).map((x) => ({
+            ...x,
+            receipt_images: (x.receipt_images ?? []) as any,
+          }))
+        );
       } catch (e: any) {
         console.log("VENDOR RECEIPTS LOAD ERROR:", e);
         setMsg(e?.message ?? "불러오기 실패");
@@ -392,32 +402,60 @@ export default function VendorReceiptsPage() {
     }
   };
 
-  const ensureSignedUrls = async (row: ReceiptRow) => {
-  if (imgUrlsById[row.id]) return;
+    const ensureSignedUrls = async (row: ReceiptRow) => {
+    const id = row.id;
 
-  // receipt_images 우선, 없으면 image_path를 1번 슬롯으로 fallback
-  const paths3: Array<string | null> = [null, null, null];
+    // 이미 값이 있으면 끝 (null 3개라도 값이 있으면 "로딩중"이 안 뜸)
+    if (imgUrlsById[id]) return;
 
-  const imgs = (row.receipt_images ?? []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  for (const it of imgs) {
-    const so = Number(it.sort_order);
-    if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
-  }
+    // ✅ 이미 요청 중이면 중복 요청 방지
+    if (signingIdsRef.current.has(id)) return;
+    signingIdsRef.current.add(id);
 
-  if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+    // ✅ 로딩 상태를 먼저 박아둔다 (이게 "무한 로딩"을 끊는 핵심)
+    setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
 
-  const signed = await Promise.all(
-    paths3.map(async (p) => {
-      if (!p) return null;
-      const { data, error } = await supabase.storage.from("receipts").createSignedUrl(p, 60 * 30);
-      if (error) return null;
-      return data?.signedUrl ?? null;
-    })
-  );
+    try {
+      // receipt_images 우선, 없으면 image_path를 1번 슬롯으로 fallback
+      const paths3: Array<string | null> = [null, null, null];
 
-  setImgUrlsById((prev) => ({ ...prev, [row.id]: signed }));
-};
+      const imgs = (row.receipt_images ?? [])
+        .slice()
+        .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 
+      for (const it of imgs) {
+        const so = Number(it.sort_order);
+        if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
+      }
+
+      if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+
+      const signed = await Promise.all(
+        paths3.map(async (p) => {
+          if (!p) return null;
+
+          const { data, error } = await supabase.storage
+            .from("receipts")
+            .createSignedUrl(p, 60 * 30);
+
+          if (error) {
+            console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
+            return null;
+          }
+          return data?.signedUrl ?? null;
+        })
+      );
+
+      // ✅ 성공/실패 상관없이 결과를 확정 set (null이어도 OK)
+      setImgUrlsById((prev) => ({ ...prev, [id]: signed }));
+    } catch (e) {
+      console.log("ensureSignedUrls failed:", e);
+      // ✅ 실패해도 "로딩중"에서 빠져나오게 확정 set
+      setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+    } finally {
+      signingIdsRef.current.delete(id);
+    }
+  };
 
   const toggleExpand = async (row: ReceiptRow) => {
     let willOpen = false;
@@ -737,17 +775,15 @@ export default function VendorReceiptsPage() {
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      const all = imgUrlsById[r.id] ?? [];
-                                      const valid = all.filter((x): x is string => !!x);
-                                      if (valid.length === 0) return;
+                                      if (!u) return;
+                                      const urls = (imgUrlsById[r.id] ?? []).filter(
+                                        (x): x is string => typeof x === "string"
+                                      );
 
-                                      // ✅ 클릭한 썸네일이 valid에서 몇번째인지 계산(중간 null 제거했으니까)
-                                      const clickedUrl = u ?? null;
-                                      const startIdx = clickedUrl ? Math.max(0, valid.indexOf(clickedUrl)) : 0;
-
-                                      setViewerUrls(valid);
-                                      setViewerIndex(startIdx);
-                                      setViewerOpen(true);
+                                      setLightboxOpen({
+                                        urls,
+                                        startIndex: idx,
+                                      });
                                     }}
                                     style={{
                                       border: "1px solid #eee",
@@ -766,17 +802,14 @@ export default function VendorReceiptsPage() {
                                       <img
                                         src={u}
                                         alt={`영수증 ${idx + 1}`}
-                                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
                                       />
                                     ) : (
                                       <div
                                         style={{
-                                          width: "100%",
-                                          height: "100%",
                                           display: "grid",
                                           placeItems: "center",
                                           fontSize: 12,
-                                          opacity: 0.7,
                                         }}
                                       >
                                         없음
@@ -1190,134 +1223,11 @@ export default function VendorReceiptsPage() {
         </>
       ) : null}
 
-{viewerOpen ? (
-  <>
-    {/* dim */}
-    <div
-      onClick={() => setViewerOpen(false)}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.65)",
-        zIndex: 999,
-      }}
-    />
-
-    {/* modal */}
-    <div
-      onClick={() => setViewerOpen(false)}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          borderRadius: 16,
-          overflow: "hidden",
-          background: "#111",
-          border: "1px solid rgba(255,255,255,0.12)",
-        }}
-      >
-        {/* header */}
-        <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", color: "#fff" }}>
-          <div style={{ fontSize: 13, fontWeight: 900 }}>영수증 이미지</div>
-          <div style={{ marginLeft: 10, fontSize: 12, opacity: 0.75 }}>
-            {viewerIndex + 1} / {viewerUrls.filter(Boolean).length || 1}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setViewerOpen(false)}
-            style={{
-              marginLeft: "auto",
-              border: "none",
-              background: "transparent",
-              color: "#fff",
-              fontSize: 18,
-              cursor: "pointer",
-              fontWeight: 900,
-            }}
-            aria-label="닫기"
-          >
-            ×
-          </button>
-        </div>
-
-        {/* big image */}
-        <div style={{ background: "#000" }}>
-          {viewerUrls[viewerIndex] ? (
-            <img
-              src={viewerUrls[viewerIndex] as string}
-              alt={`영수증 크게보기 ${viewerIndex + 1}`}
-              style={{
-                width: "100%",
-                maxHeight: "75vh",
-                objectFit: "contain",
-                display: "block",
-              }}
-            />
-          ) : (
-            <div style={{ color: "#fff", padding: 24, fontSize: 13, opacity: 0.8 }}>
-              이미지가 없습니다.
-            </div>
-          )}
-        </div>
-
-        {/* thumbs */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 8,
-            padding: 10,
-            background: "#0b0b0b",
-          }}
-        >
-          {viewerUrls.map((u, idx) => (
-            <button
-              key={idx}
-              type="button"
-              disabled={!u}
-              onClick={() => setViewerIndex(idx)}
-              style={{
-                borderRadius: 12,
-                border: idx === viewerIndex ? "2px solid rgba(255,255,255,0.9)" : "1px solid rgba(255,255,255,0.18)",
-                background: "transparent",
-                padding: 0,
-                overflow: "hidden",
-                aspectRatio: "1 / 1",
-                cursor: u ? "pointer" : "not-allowed",
-                opacity: u ? 1 : 0.25,
-              }}
-              aria-label={`썸네일 ${idx + 1}`}
-              title={u ? "이 이미지로 보기" : ""}
-            >
-              {u ? (
-                <img
-                  src={u}
-                  alt={`thumb ${idx + 1}`}
-                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                />
-              ) : (
-                <div style={{ width: "100%", height: "100%" }} />
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  </>
-) : null}
-
+      <ReceiptLightbox
+        urls={lightboxOpen?.urls ?? []}
+        startIndex={lightboxOpen?.startIndex ?? -1}
+        onClose={() => setLightboxOpen(null)}
+      />
     </div>
   );
 }
