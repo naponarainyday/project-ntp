@@ -775,14 +775,14 @@ export default function VendorReceiptsPage() {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       if (!u) return;
-                                      const urls = (imgUrlsById[r.id] ?? []).filter(
-                                        (x): x is string => typeof x === "string"
-                                      );
 
-                                      setLightboxOpen({
-                                        urls,
-                                        startIndex: idx,
-                                      });
+                                        const all = imgUrlsById[r.id] ?? [];
+                                        const urls = all.filter((x): x is string => typeof x === "string");
+
+                                        const startIndex = urls.indexOf(u); // ✅ 핵심
+                                        if (startIndex < 0) return;
+
+                                        setLightboxOpen({ urls, startIndex });
                                     }}
                                     style={{
                                       border: "1px solid #eee",

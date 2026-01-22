@@ -13,6 +13,11 @@ type ReceiptType = "standard" | "simple" | null;
 type Market = { id: string; name: string | null; sort_order: number | null };
 type Vendor = { id: string; name: string; stall_no: string | null; markets?: Market[] | Market | null };
 
+type ReceiptImageLite = {
+  path: string;
+  sort_order: number; // 1~3
+};
+
 type Row = {
   id: string;
   vendor_id: string;
@@ -22,11 +27,14 @@ type Row = {
   deposit_date: string | null;
   receipt_type: ReceiptType;
   created_at: string;
-  receipt_date?: string | null; // ✅ 새로 사용 (없으면 created_at fallback)
+  receipt_date?: string | null;
   memo?: string | null;
   vendors?: Vendor[] | Vendor | null;
   image_path: string | null;
+  receipt_images?: ReceiptImageLite[] | null
 };
+
+
 
 function formatMoney(n: number) {
   try {
@@ -200,7 +208,7 @@ export default function ReceiptsPage() {
           .select(
             `
               id, vendor_id, amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
-              image_path, vendors:vendors!receipts_vendor_id_fkey (
+              image_path, receipt_images(path, sort_order), vendors:vendors!receipts_vendor_id_fkey (
                 id, name, stall_no,
                 markets:markets!vendors_market_id_fkey (id, name, sort_order)
               )
@@ -209,7 +217,12 @@ export default function ReceiptsPage() {
 
         if (error) throw error;
 
-        setRows((data ?? []) as unknown as Row[]);
+        setRows(
+          ((data ?? []) as Row[]).map((x) => ({
+            ...x,
+            receipt_images: (x.receipt_images ?? []) as any,
+          }))
+        );
       } catch (e: any) {
         console.log("RECEIPTS LOAD ERROR:", e);
         setMsg(e?.message ?? "불러오기 실패");
@@ -405,44 +418,54 @@ export default function ReceiptsPage() {
   };
 
   const ensureSignedUrls = async (row: Row) => {
-    const id = row.id;
+  const id = row.id;
 
-    // 이미 있으면 끝
-    if (imgUrlsById[id]) return;
+  // 이미 있으면 끝
+  if (imgUrlsById[id]) return;
 
-    // 중복 요청 방지
-    if (signingIdsRef.current.has(id)) return;
-    signingIdsRef.current.add(id);
+  // 중복 요청 방지
+  if (signingIdsRef.current.has(id)) return;
+  signingIdsRef.current.add(id);
 
-    // 로딩 상태(3칸)
-    setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+  // 로딩 상태(3칸)
+  setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
 
-    try {
-      const paths3: Array<string | null> = [null, null, null];
+  try {
+    const paths3: Array<string | null> = [null, null, null];
 
-      // receipts 페이지는 일단 image_path 1장만
-      if (row.image_path) paths3[0] = row.image_path;
+    // ✅ receipt_images 우선
+    const imgs = (row.receipt_images ?? [])
+      .slice()
+      .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 
-      const signed = await Promise.all(
-        paths3.map(async (p) => {
-          if (!p) return null;
-          const { data, error } = await supabase.storage.from("receipts").createSignedUrl(p, 60 * 30);
-          if (error) {
-            console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
-            return null;
-          }
-          return data?.signedUrl ?? null;
-        })
-      );
-
-      setImgUrlsById((prev) => ({ ...prev, [id]: signed }));
-    } catch (e) {
-      console.log("ensureSignedUrls failed:", e);
-      setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
-    } finally {
-      signingIdsRef.current.delete(id);
+    for (const it of imgs) {
+      const so = Number(it.sort_order);
+      if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
     }
-  };
+
+    // ✅ fallback: image_path를 1번 슬롯에
+    if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+
+    const signed = await Promise.all(
+      paths3.map(async (p) => {
+        if (!p) return null;
+        const { data, error } = await supabase.storage.from("receipts").createSignedUrl(p, 60 * 30);
+        if (error) {
+          console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
+          return null;
+        }
+        return data?.signedUrl ?? null;
+      })
+    );
+
+    setImgUrlsById((prev) => ({ ...prev, [id]: signed }));
+  } catch (e) {
+    console.log("ensureSignedUrls failed:", e);
+    setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+  } finally {
+    signingIdsRef.current.delete(id);
+  }
+};
 
   const toggleExpand = async (row: Row) => {
     const id = row.id;
@@ -663,8 +686,13 @@ export default function ReceiptsPage() {
                                 e.stopPropagation();
                                 if (!u) return;
 
-                                const urls = (imgUrlsById[r.id] ?? []).filter((x): x is string => typeof x === "string");
-                                setLightboxOpen({ urls, startIndex: idx });
+                                const all = imgUrlsById[r.id] ?? [];
+                                const urls = all.filter((x): x is string => typeof x === "string");
+
+                                const startIndex = urls.indexOf(u); // ✅ 핵심 (4번)
+                                if (startIndex < 0) return;
+
+                                setLightboxOpen({ urls, startIndex });
                               }}
                               disabled={!u}
                               style={{
