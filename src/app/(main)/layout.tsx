@@ -4,8 +4,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-
 import { supabase } from "@/lib/supabaseClient";
+import { Menu, FileText, Store, User, LogOut } from "lucide-react";
 
 function cn(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -86,7 +86,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             </span>
 
             {/* 오른쪽: 액션 아이콘 자리(최대 2~3개) */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 text-slate-200">
               {/* TODO: 페이지별로 필요한 액션 버튼을 여기에 렌더링 */}
               {/* 예시(지금은 자리만): */}
               {/* <button
@@ -144,12 +144,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     onClick={() => setIsDrawerOpen(false)}
                     className={cn(
                       "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
-                      isReceipts ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
+                      isReceipts ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
                     )}
                   >
-                    <span className="text-xl" aria-hidden>
-                      📄
-                    </span>
+                    <FileText size={20} />
                     영수증 내역
                   </Link>
 
@@ -158,12 +156,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     onClick={() => setIsDrawerOpen(false)}
                     className={cn(
                       "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
-                      isVendors ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
+                      isVendors ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
                     )}
                   >
-                    <span className="text-xl" aria-hidden>
-                      🏪
-                    </span>
+                  <Store size={20} />
                     상가별 영수증 현황
                   </Link>
 
@@ -172,12 +168,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     onClick={() => setIsDrawerOpen(false)}
                     className={cn(
                       "flex items-center gap-4 rounded-xl p-4 text-base font-medium transition-colors",
-                      isSettings ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-100"
+                      isSettings ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
                     )}
                   >
-                    <span className="text-xl" aria-hidden>
-                      👤
-                    </span>
+                  <User size={20} />
                     마이페이지
                   </Link>
                 </nav>
@@ -187,11 +181,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="mb-4 flex w-full items-center gap-4 rounded-xl p-4 text-base font-medium text-red-500 hover:bg-red-50"
+                  className="mb-4 flex w-full items-center gap-4 rounded-xl p-4 text-base font-medium text-red-700 hover:bg-red-100"
                 >
-                  <span className="text-xl" aria-hidden>
-                    🚪
-                  </span>
+                <LogOut size={20} />
                   <span>로그아웃</span>
                 </button>
               </div>
@@ -208,18 +200,18 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           "
           aria-label="하단 내비게이션"
         >
-          <div className="flex h-16 items-center justify-between px-4">
+          <div className="flex h-16 items-center justify-between pl-4 pr-6">
             {/* 메뉴 */}
             <button
               type="button"
-              className={cn("flex flex-col items-center", isDrawerOpen ? "text-blue-600" : "text-gray-500")}
+              className={cn(
+                "flex flex-col items-center",
+                isDrawerOpen ? "text-blue-600" : "text-slate-400"
+              )}
               aria-label={isDrawerOpen ? "메뉴 닫기" : "메뉴 열기"}
               onClick={() => setIsDrawerOpen((v) => !v)}
             >
-              <span className="text-2xl" aria-hidden>
-                ☰
-              </span>
-              <span className="text-[10px]">메뉴</span>
+              <Menu size={30} />
             </button>
 
             {/* ✅ 내역 */}
@@ -227,39 +219,35 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               href="/receipts"
               className={cn(
                 "flex flex-col items-center",
-                isReceipts && !isDrawerOpen ? "text-blue-600" : "text-gray-500"
+                isReceipts && !isDrawerOpen ? "text-slate-800" : "text-slate-400"
               )}
-              aria-current={isReceipts ? "page" : undefined}
             >
-              <span className="text-2xl" aria-hidden>
-                📄
-              </span>
-              <span className="text-[10px]">내역</span>
+              <FileText size={30} />
             </Link>
+
 
             {/* ✅ 상가별 영수증 현황 */}
             <Link
-              href="/vendors"
-              className={cn("flex flex-col items-center", isVendors && !isDrawerOpen ? "text-blue-600" : "text-gray-500")}
-              aria-current={isVendors ? "page" : undefined}
-            >
-              <span className="text-2xl" aria-hidden>🏪</span>
-              <span className="text-[10px]">상가</span>
-            </Link>
+            href="/vendors"
+            className={cn(
+              "flex flex-col items-center",
+              isVendors && !isDrawerOpen ? "text-slate-800" : "text-slate-400"
+            )}
+          >
+            <Store size={30} />
+          </Link>
+
 
             {/* ✅ 마이 */}
             <Link
               href="/settings"
               className={cn(
                 "flex flex-col items-center",
-                isSettings && !isDrawerOpen ? "text-blue-600" : "text-gray-500"
+                isSettings && !isDrawerOpen ? "text-slate-800" : "text-slate-400"
               )}
-              aria-current={isSettings ? "page" : undefined}
             >
-              <span className="text-2xl" aria-hidden>
-                👤
-              </span>
-              <span className="text-[10px]">마이</span>
+              <User size={30} />
+              {/* <span className="text-[10px]">마이</span> */}
             </Link>
           </div>
         </nav>
