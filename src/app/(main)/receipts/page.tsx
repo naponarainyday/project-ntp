@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { ChevronDown } from "lucide-react"; // ✅ (4) chevron 아이콘
+import ReceiptLightbox from "@/components/ReceiptLightbox";
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer" | "payable";
@@ -24,6 +25,7 @@ type Row = {
   receipt_date?: string | null; // ✅ 새로 사용 (없으면 created_at fallback)
   memo?: string | null;
   vendors?: Vendor[] | Vendor | null;
+  image_path: string | null;
 };
 
 function formatMoney(n: number) {
@@ -128,9 +130,9 @@ function getPeriodRange(p: PeriodKey, customFrom: string, customTo: string) {
 }
 
 function statusButtonStyle(s: ReceiptStatus) {
-  if (s === "uploaded") return { border: "#000936", bg: "#FFFFFF", text: "#000000" };
-  if (s === "requested") return { border: "#16A34A", bg: "#c9ffcf", text: "#001709" };
-  if (s === "needs_fix") return { border: "#ff3300", bg: "#fff2f2", text: "#351400" };
+  if (s === "uploaded") return { border: "#0e0e0e", bg: "#FFFFFF", text: "#000000" };
+  if (s === "requested") return { border: "#c1d2ee", bg: "#c1d2ee", text: "#000000" };
+  if (s === "needs_fix") return { border: "#f3cfce", bg: "#f3cfce", text: "#000000" };
   return { border: "#9CA3AF", bg: "#eae9e9", text: "#050608" };
 }
 
@@ -167,6 +169,17 @@ export default function ReceiptsPage() {
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<ReceiptStatus | null>(null);
 
+  // expand row
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [imgUrlsById, setImgUrlsById] = useState<Record<string, Array<string | null>>>({});
+  const signingIdsRef = useRef<Set<string>>(new Set());
+
+  // lightbox
+  const [lightboxOpen, setLightboxOpen] = useState<{
+    urls: string[];
+    startIndex: number;
+  } | null>(null);
+
   useEffect(() => {
     (async () => {
       setMsg("");
@@ -187,7 +200,7 @@ export default function ReceiptsPage() {
           .select(
             `
               id, vendor_id, amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
-              vendors:vendors!receipts_vendor_id_fkey (
+              image_path, vendors:vendors!receipts_vendor_id_fkey (
                 id, name, stall_no,
                 markets:markets!vendors_market_id_fkey (id, name, sort_order)
               )
@@ -244,8 +257,21 @@ export default function ReceiptsPage() {
         return name.includes(q);
       });
     }
+    function parseCreatedAtKey(r: Row) {
+      const t = Date.parse(r.created_at);
+      return Number.isFinite(t) ? t : 0;
+    }
 
-    list.sort((a, b) => parseDateKey(b) - parseDateKey(a));
+    function compareReceiptDesc(a: Row, b: Row) {
+      const d = parseDateKey(b) - parseDateKey(a);
+      if (d !== 0) return d;
+
+      const c = parseCreatedAtKey(b) - parseCreatedAtKey(a);
+      if (c !== 0) return c;
+
+      return String(b.id).localeCompare(String(a.id));
+    }
+    list.sort(compareReceiptDesc);
     return list;
   }, [rows, vendorQuery, period, customFrom, customTo, statusFilter, paymentFilter]);
 
@@ -378,6 +404,61 @@ export default function ReceiptsPage() {
     }
   };
 
+  const ensureSignedUrls = async (row: Row) => {
+    const id = row.id;
+
+    // 이미 있으면 끝
+    if (imgUrlsById[id]) return;
+
+    // 중복 요청 방지
+    if (signingIdsRef.current.has(id)) return;
+    signingIdsRef.current.add(id);
+
+    // 로딩 상태(3칸)
+    setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+
+    try {
+      const paths3: Array<string | null> = [null, null, null];
+
+      // receipts 페이지는 일단 image_path 1장만
+      if (row.image_path) paths3[0] = row.image_path;
+
+      const signed = await Promise.all(
+        paths3.map(async (p) => {
+          if (!p) return null;
+          const { data, error } = await supabase.storage.from("receipts").createSignedUrl(p, 60 * 30);
+          if (error) {
+            console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
+            return null;
+          }
+          return data?.signedUrl ?? null;
+        })
+      );
+
+      setImgUrlsById((prev) => ({ ...prev, [id]: signed }));
+    } catch (e) {
+      console.log("ensureSignedUrls failed:", e);
+      setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+    } finally {
+      signingIdsRef.current.delete(id);
+    }
+  };
+
+  const toggleExpand = async (row: Row) => {
+    const id = row.id;
+    const isOpen = expandedIds.has(id);
+    const willOpen = !isOpen;
+
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+    if (willOpen) await ensureSignedUrls(row);
+  };
+
   return (
     <div style={{ margin: "0 auto", paddingBottom: 170 }}>
       {/* 상단 CTA */}
@@ -498,78 +579,149 @@ export default function ReceiptsPage() {
               <li
                 key={r.id}
                 style={{
-                  display: "flex",
-                  alignItems: "center", // ✅ (1) 행 전체를 세로 가운데로
-                  gap: 8,
                   padding: "1px 1px",
                   background: isCompleted ? "#D9D9D9" : "#FFFFFF",
                   borderBottom: "1px solid #CDCDCD",
-                }}
-              >
-                {/* checkbox */}
-                <div style={{ display: "flex", alignItems: "center", paddingLeft: 5 }}>
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => toggleSelect(r)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ width: 18, height: 18, cursor: "pointer" }}
-                    aria-label="선택"
-                  />
-                </div>
-
-                {/* main content (clickable) */}
-                <div
-                  onClick={() => router.push(`/receipts/${r.id}`)}
-                  style={{
-                    flex: 1,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center", // ✅ (1) 가운데 정렬 유지
-                    minHeight: 40,
-                  }}
-                >
-                  {/* left: date + vendor */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                    <div style={{ fontSize: 12, opacity: 0.85, minWidth: 62 }}>{dateText}</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{vendorName}</div>
+                }}>
+                <div style= {{ display: "flex", alignItems: "center", gap: 8}}>
+                  {/* checkbox */}
+                  <div style={{ display: "flex", alignItems: "center", paddingLeft: 5 }}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(r)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ width: 18, height: 18, cursor: "pointer" }}
+                      aria-label="선택"
+                    />
                   </div>
 
-                  {/* right: payment + amount + status */}
+                  {/* main content (clickable) */}
                   <div
+                    onClick={() => toggleExpand(r)}
                     style={{
-                      marginLeft: "auto",
+                      flex: 1,
+                      cursor: "pointer",
                       display: "flex",
-                      alignItems: "center", // ✅ (2) 한 줄로
-                      gap: 8,
+                      alignItems: "center", // ✅ (1) 가운데 정렬 유지
+                      minHeight: 40,
                     }}
                   >
-                    {/* ✅ (2) payment method: amount 앞, 옅은 회색 */}
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>
-                      {paymentLabel(r.payment_method)}
+                    {/* left: date + vendor */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                      <div style={{ fontSize: 12, opacity: 0.85, minWidth: 62 }}>{dateText}</div>
+                      <div style={{ fontSize: 14, fontWeight: 800, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{vendorName}</div>
                     </div>
 
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>{formatMoney(Number(r.amount || 0))} 원</div>
-
-                    {/* ✅ (3) list에서만 status 버튼 “더 촘촘하게” */}
-                    <button
-                      type="button"
-                      onClick={(e) => e.stopPropagation()}
+                    {/* right: payment + amount + status */}
+                    <div
                       style={{
-                        fontSize: 11,
-                        padding: "4px 4px", // ✅ 줄임
-                        lineHeight: "14px",  // ✅ 줄임
-                        borderRadius: 6,
-                        border: `1px solid ${statusStyle.border}`,
-                        background: statusStyle.bg,
-                        color: statusStyle.text,
-                        cursor: "default",
+                        marginLeft: "auto",
+                        display: "flex",
+                        alignItems: "center", // ✅ (2) 한 줄로
+                        gap: 8,
                       }}
                     >
-                      {statusLabel(r.status)}
-                    </button>
+                      {/* ✅ (2) payment method: amount 앞, 옅은 회색 */}
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>
+                        {paymentLabel(r.payment_method)}
+                      </div>
+
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>{formatMoney(Number(r.amount || 0))} 원</div>
+
+                      {/* ✅ (3) list에서만 status 버튼 “더 촘촘하게” */}
+                      <button
+                        type="button"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          fontSize: 11,
+                          padding: "4px 4px", // ✅ 줄임
+                          lineHeight: "14px",  // ✅ 줄임
+                          borderRadius: 6,
+                          border: `1px solid ${statusStyle.border}`,
+                          background: statusStyle.bg,
+                          color: statusStyle.text,
+                          cursor: "default",
+                        }}
+                      >
+                        {statusLabel(r.status)}
+                      </button>
+                    </div>
                   </div>
                 </div>
+                  {/* ✅ expanded 영역 */}
+                  {expandedIds.has(r.id) ? (
+                    <div style={{ marginTop: 10, paddingLeft: 28, paddingRight: 6, paddingBottom: 10 }}>
+                      {/* 이미지 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                        {imgUrlsById[r.id] ? (
+                          imgUrlsById[r.id].map((u, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!u) return;
+
+                                const urls = (imgUrlsById[r.id] ?? []).filter((x): x is string => typeof x === "string");
+                                setLightboxOpen({ urls, startIndex: idx });
+                              }}
+                              disabled={!u}
+                              style={{
+                                border: "1px solid #eee",
+                                background: "#fff",
+                                borderRadius: 10,
+                                padding: 0,
+                                overflow: "hidden",
+                                cursor: u ? "pointer" : "default",
+                                opacity: u ? 1 : 0.35,
+                                aspectRatio: "1 / 1",
+                              }}
+                              aria-label={`영수증 이미지 ${idx + 1} 크게보기`}
+                            >
+                              {u ? (
+                                <img src={u} alt={`영수증 ${idx + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                              ) : (
+                                <div style={{ display: "grid", placeItems: "center", fontSize: 12 }}>없음</div>
+                              )}
+                            </button>
+                          ))
+                        ) : (
+                          <div style={{ gridColumn: "1 / -1", fontSize: 12, opacity: 0.7 }}>이미지 불러오는 중…</div>
+                        )}
+                      </div>
+
+                      <div style={{ marginTop: 10, borderTop: "1px solid #E5E7EB" }} />
+
+                      {/* memo + 자세히 보기 */}
+                      <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+                        <div style={{ fontSize: 14, whiteSpace: "pre-wrap", wordBreak: "break-word", minHeight: 44 }}>
+                          {(r.memo ?? "").trim() ? (r.memo ?? "").trim() : <span style={{ opacity: 0.55 }}>메모 없음</span>}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/receipts/${r.id}`);
+                          }}
+                          style={{
+                            width: "100%",
+                            border: "1px solid #E5E7EB",
+                            background: "#FFFFFF",
+                            borderRadius: 12,
+                            padding: "10px 10px",
+                            fontSize: 13,
+                            fontWeight: 800,
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          자세히 보기
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
               </li>
             );
           })}
@@ -936,6 +1088,13 @@ export default function ReceiptsPage() {
           </div>
         </>
       ) : null}
+
+      <ReceiptLightbox
+        urls={lightboxOpen?.urls ?? []}
+        startIndex={lightboxOpen?.startIndex ?? -1}
+        onClose={() => setLightboxOpen(null)}
+      />
+
     </div>
   );
 }

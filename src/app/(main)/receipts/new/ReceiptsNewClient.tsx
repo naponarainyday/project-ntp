@@ -439,8 +439,11 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
   async function onPickFromCamera(inputFiles: FileList | null) {
     if (!inputFiles || inputFiles.length === 0) return;
   
-    const slot = sheetSlot ?? files.findIndex((f) => !f);
-    if (slot === -1) return;
+    const slot = sheetSlot ?? findFirstEmptySlot();
+    if (slot === -1) {
+      setMsg("이미지는 최대 3장까지 가능합니다.")
+      return;
+    }
   
     const f  = inputFiles[0];
     if (cameraRef.current) cameraRef.current.value = "";
@@ -886,14 +889,14 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
       <input
         ref={filePickerRef}
         type="file"
-        accept="IMAGE_ACCEPT"
+        accept={IMAGE_ACCEPT}
         style={{ display: "none" }}
         onChange={(e) => onPickFromFile(e.target.files)}
       />
       <input
         ref={cameraRef}
         type="file"
-        accept="IMAGE_ACCEPT"
+        accept={IMAGE_ACCEPT}
         capture="environment"
         style={{ display: "none" }}
         onChange={(e) => onPickFromCamera(e.target.files)}
@@ -1180,10 +1183,10 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", opacity: loadingEdit ? 0.6 : 1 }}>
-            {StatusButton("uploaded", "업로드", { border: "3px solid #000936", color: "#000936", background: "#ffffff" })}
-            {StatusButton("requested", "요청중", { border: "3px solid #16A34A", color: "#001709", background: "#c9ffcf" })}
-            {StatusButton("needs_fix", "수정필요", { border: "3px solid #ff3300", color: "#351400", background: "#fff2f2" })}
-            {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#050608", background: "#eae9e9" })}
+            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000000", background: "#ffffff" })}
+            {StatusButton("requested", "요청중", { border: "3px solid #8dafe6", color: "#000000", background: "#c1d2ee" })}
+            {StatusButton("needs_fix", "수정필요", { border: "3px solid #efa6a3", color: "#000000", background: "#f3cfce" })}
+            {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#000000", background: "#eae9e9" })}
           </div>
         </div>
 
@@ -1252,6 +1255,9 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
               <button
                 type="button"
                 onClick={() => {
+                  const slot = sheetSlot ?? findFirstEmptySlot();
+                    if (slot === -1) return;
+                  setSheetSlot(slot);
                   closeSheet();
                   cameraRef.current?.click();
                 }}
