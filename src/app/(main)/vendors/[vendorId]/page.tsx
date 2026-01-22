@@ -85,9 +85,9 @@ function capabilityDot(cap: VendorInfo["invoice_capability"]) {
 
 function statusButtonStyle(s: ReceiptStatus) {
   if (s === "uploaded") return { border: "#000936", bg: "#FFFFFF", text: "#000000" };
-  if (s === "requested") return { border: "#16A34A", bg: "#c9ffcf", text: "#001709" };
-  if (s === "needs_fix") return { border: "#ff3300", bg: "#fff2f2", text: "#351400" };
-  return { border: "#9CA3AF", bg: "#eae9e9", text: "#050608" };
+  if (s === "requested") return { border: "#c1d2ee", bg: "#c1d2ee", text: "#000000" };
+  if (s === "needs_fix") return { border: "#f3cfce", bg: "#f3cfce", text: "#000000" };
+  return { border: "#9CA3AF", bg: "#eae9e9", text: "#000000" };
 }
 
 function parseDateKey(r: ReceiptRow) {
@@ -458,19 +458,18 @@ export default function VendorReceiptsPage() {
   };
 
   const toggleExpand = async (row: ReceiptRow) => {
-    let willOpen = false;
+    const id = row.id;
+    const isAlreadyOpen = expandedIds.has(id);
+    const nextWillOpen = !isAlreadyOpen;
 
     setExpandedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(row.id)) next.delete(row.id);
-      else {
-        next.add(row.id);
-        willOpen = true;
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
-    if (willOpen) await ensureSignedUrls(row);
+    if (nextWillOpen) await ensureSignedUrls(row);
   };
 
   // ✅ 홈과 같은 헤더 구성요소 (각각 스타일 따로)

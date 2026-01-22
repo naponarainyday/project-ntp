@@ -78,8 +78,36 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       {/* 컨테이너 */}
       <div className="mx-auto flex min-h-screen max-w-md flex-col bg-white shadow-sm relative">
         {/* 1) 헤더 */}
-        <header className="sticky top-0 z-10 flex h-10 items-center justify-left border-b bg-white/90 backdrop-blur px-6">
-          <span className="font-bold text-gray-800 tracking-tight text-lg">{title}</span>
+        <header className="sticky top-0 z-10 bg-slate-700">
+          <div className="flex h-10 items-center justify-between px-6">
+            {/* 왼쪽: 타이틀 */}
+            <span className="font-bold tracking-tight text-lg text-white">
+              {title}
+            </span>
+
+            {/* 오른쪽: 액션 아이콘 자리(최대 2~3개) */}
+            <div className="flex items-center gap-2">
+              {/* TODO: 페이지별로 필요한 액션 버튼을 여기에 렌더링 */}
+              {/* 예시(지금은 자리만): */}
+              {/* <button
+                type="button"
+                className="h-8 w-8 rounded-lg text-slate-200 hover:bg-slate-800 hover:text-white transition"
+                aria-label="액션1"
+                disabled
+              >
+                ⤴️
+              </button>
+              <button
+                type="button"
+                className="h-8 w-8 rounded-lg text-slate-200 hover:bg-slate-800 hover:text-white transition"
+                aria-label="액션2"
+                disabled
+              >
+                📋
+              </button> */}
+              {/* 필요하면 3번째도 같은 패턴으로 추가 */}
+            </div>
+          </div>
         </header>
 
         {/* 2) 콘텐츠 */}
