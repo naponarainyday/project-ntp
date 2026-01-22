@@ -216,6 +216,8 @@ export default function NewReceiptPage() {
     } catch (e: any) {
       console.error("image convert error:", e);
       setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
+    } finally {
+      setSheetSlot(null);
     }
   }
 
@@ -235,12 +237,18 @@ export default function NewReceiptPage() {
 
   function closeSheet() {
     setSheetOpen(false);
-    setSheetSlot(null);
+  }
+
+  function findFirstEmptySlot() {
+  for (let i = 0; i < 3; i++) {
+    if (!files[i]) return i;
+  }
+  return -1;
   }
 
   function openCameraQuick() {
     if (selectedCount >= MAX_IMAGES) return;
-    const slot = files.findIndex((f) => !f);
+    const slot = findFirstEmptySlot();
     if (slot === -1) return;
     setSheetSlot(slot);
     cameraRef.current?.click();
@@ -631,9 +639,18 @@ export default function NewReceiptPage() {
         >
           <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420, borderRadius: 18, overflow: "hidden" }}>
             <div style={{ background: "rgba(245,245,245,0.98)", borderRadius: 18, overflow: "hidden", border: "1px solid rgba(0,0,0,0.06)" }}>
-              <button type="button" onClick={() => { closeSheet(); cameraRef.current?.click(); }} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}>카메라로 촬영</button>
+              <button type="button" onClick={() => { 
+                const slot = sheetSlot ?? files.findIndex((f) => !f);
+                if (slot === -1) return;
+                setSheetSlot(slot);
+                closeSheet(); cameraRef.current?.click(); }} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}>카메라로 촬영</button>
               <div style={{ height: 1, background: "rgba(0,0,0,0.08)" }} />
-              <button type="button" onClick={() => { filePickerRef.current?.click(); }} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}>파일 선택</button>
+              <button type="button" onClick={() => { 
+                const slot = sheetSlot ?? files.findIndex((f) => !f);
+                if (slot === -1) return;
+                setSheetSlot(slot);
+                closeSheet();
+                filePickerRef.current?.click(); }} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}>파일 선택</button>
             </div>
             <div style={{ height: 10 }} />
             <div style={{ background: "rgba(245,245,245,0.98)", borderRadius: 18, overflow: "hidden", border: "1px solid rgba(0,0,0,0.06)" }}>

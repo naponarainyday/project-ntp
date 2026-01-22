@@ -439,8 +439,11 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
   async function onPickFromCamera(inputFiles: FileList | null) {
     if (!inputFiles || inputFiles.length === 0) return;
   
-    const slot = sheetSlot ?? files.findIndex((f) => !f);
-    if (slot === -1) return;
+    const slot = sheetSlot ?? findFirstEmptySlot();
+    if (slot === -1) {
+      setMsg("이미지는 최대 3장까지 가능합니다.")
+      return;
+    }
   
     const f  = inputFiles[0];
     if (cameraRef.current) cameraRef.current.value = "";
@@ -886,14 +889,14 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
       <input
         ref={filePickerRef}
         type="file"
-        accept="IMAGE_ACCEPT"
+        accept={IMAGE_ACCEPT}
         style={{ display: "none" }}
         onChange={(e) => onPickFromFile(e.target.files)}
       />
       <input
         ref={cameraRef}
         type="file"
-        accept="IMAGE_ACCEPT"
+        accept={IMAGE_ACCEPT}
         capture="environment"
         style={{ display: "none" }}
         onChange={(e) => onPickFromCamera(e.target.files)}
@@ -1252,6 +1255,9 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
               <button
                 type="button"
                 onClick={() => {
+                  const slot = sheetSlot ?? findFirstEmptySlot();
+                    if (slot === -1) return;
+                  setSheetSlot(slot);
                   closeSheet();
                   cameraRef.current?.click();
                 }}
