@@ -42,7 +42,7 @@ const STATUS_ORDER: ReceiptStatus[] = ["needs_fix", "uploaded", "requested", "co
 function statusLabel(s: ReceiptStatus) {
   switch (s) {
     case "uploaded":
-      return "업로드";
+      return "요청대기";
     case "requested":
       return "요청중";
     case "needs_fix":
@@ -85,8 +85,8 @@ function capabilityDot(cap: VendorInfo["invoice_capability"]) {
 
 function statusButtonStyle(s: ReceiptStatus) {
   if (s === "uploaded") return { border: "#000936", bg: "#FFFFFF", text: "#000000" };
-  if (s === "requested") return { border: "#c1d2ee", bg: "#c1d2ee", text: "#000000" };
-  if (s === "needs_fix") return { border: "#f3cfce", bg: "#f3cfce", text: "#000000" };
+  if (s === "requested") return { border: "#8dafe6", bg: "#c1d2ee", text: "#000000" };
+  if (s === "needs_fix") return { border: "#efa6a3", bg: "#f3cfce", text: "#000000" };
   return { border: "#9CA3AF", bg: "#eae9e9", text: "#000000" };
 }
 
@@ -172,6 +172,13 @@ export default function VendorReceiptsPage() {
   const [statusFilter, setStatusFilter] = useState<Set<ReceiptStatus>>(new Set());
   const [paymentFilter, setPaymentFilter] = useState<Set<PaymentMethod>>(new Set());
 
+  const statusDescriptions: Record<ReceiptStatus, string> = {
+    uploaded: "영수증 업로드 후 아직 계산서 발행 요청을 하지 않은 상태입니다.",
+    requested: "계산서 발행을 요청한 상태입니다.",
+    needs_fix: "계산서 발행 요청에 문제가 있어 수정이 필요한 상태입니다.",
+    completed: "세금계산서 발행이 완료된 상태입니다.",
+  };
+
   // expand row
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   // 변경: 3장 배열로 저장
@@ -203,6 +210,12 @@ export default function VendorReceiptsPage() {
     for (const r of selectedRows) if (r.status !== s) return null;
     return s;
   }, [selectedRows]);
+
+  const statusDrawerDescription = useMemo(() => {
+  const key = pendingStatus ?? uniformSelectedStatus;
+  if (!key) return null;
+  return statusDescriptions[key];
+  }, [pendingStatus, uniformSelectedStatus]);
 
   const canOpenStatusDrawer = useMemo(() => {
     return selectedRows.length > 0 && !!uniformSelectedStatus;
@@ -413,45 +426,45 @@ export default function VendorReceiptsPage() {
     signingIdsRef.current.add(id);
 
     // ✅ 로딩 상태를 먼저 박아둔다 (이게 "무한 로딩"을 끊는 핵심)
-    setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+    setImgUrlsById((prev) => ({ ...prev, [id]: [] }));
 
     try {
-      // receipt_images 우선, 없으면 image_path를 1번 슬롯으로 fallback
-      const paths3: Array<string | null> = [null, null, null];
-
       const imgs = (row.receipt_images ?? [])
         .slice()
         .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 
+      const paths: string[] = [];
       for (const it of imgs) {
-        const so = Number(it.sort_order);
-        if (so >= 1 && so <= 3 && it.path) paths3[so - 1] = it.path;
+        if (it?.path) paths.push(it.path);
       }
 
-      if (!paths3[0] && row.image_path) paths3[0] = row.image_path;
+    // 3) fallback: 예전 image_path만 있는 경우
+    if (paths.length === 0 && row.image_path) {
+      paths.push(row.image_path);
+    }
 
-      const signed = await Promise.all(
-        paths3.map(async (p) => {
-          if (!p) return null;
+    const signed = await Promise.all(
+      paths.map(async (p) => {
+        if (!p) return null;
+      
+        const { data, error } = await supabase.storage
+          .from("receipts")
+          .createSignedUrl(p, 60 * 30);
 
-          const { data, error } = await supabase.storage
-            .from("receipts")
-            .createSignedUrl(p, 60 * 30);
-
-          if (error) {
-            console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
-            return null;
-          }
-          return data?.signedUrl ?? null;
-        })
-      );
+        if (error) {
+          console.log("SIGNED URL ERROR:", { receiptId: id, path: p, error });
+          return null;
+        }
+        return data?.signedUrl ?? null;
+      })
+    );
 
       // ✅ 성공/실패 상관없이 결과를 확정 set (null이어도 OK)
       setImgUrlsById((prev) => ({ ...prev, [id]: signed }));
     } catch (e) {
       console.log("ensureSignedUrls failed:", e);
       // ✅ 실패해도 "로딩중"에서 빠져나오게 확정 set
-      setImgUrlsById((prev) => ({ ...prev, [id]: [null, null, null] }));
+      setImgUrlsById((prev) => ({ ...prev, [id]: [] }));
     } finally {
       signingIdsRef.current.delete(id);
     }
@@ -766,60 +779,80 @@ export default function VendorReceiptsPage() {
                         {isExpanded ? (
                           <div style={{ marginTop: 10, paddingLeft: 26 }}>
                             {/* 1) 이미지 3장 1행 */}
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-                              {imgUrlsById[r.id] ? (
-                                imgUrlsById[r.id].map((u, idx) => (
-                                  <button
-                                    key={idx}
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!u) return;
+                            {/* ✅ 이미지 캐러셀(가로 스크롤) */}
+                            {(() => {
+                              const list = imgUrlsById[r.id]; // Array<string | null> | undefined
 
-                                        const all = imgUrlsById[r.id] ?? [];
-                                        const urls = all.filter((x): x is string => typeof x === "string");
+                              if (!list) {
+                                return <div style={{ fontSize: 12, opacity: 0.7 }}>이미지 불러오는 중…</div>;
+                              }
 
-                                        const startIndex = urls.indexOf(u); // ✅ 핵심
-                                        if (startIndex < 0) return;
-
-                                        setLightboxOpen({ urls, startIndex });
-                                    }}
+                              const urls = list.filter((x): x is string => typeof x === "string");
+                              if (urls.length === 0) {
+                                return (
+                                  <div
                                     style={{
                                       border: "1px solid #eee",
-                                      background: "#fff",
                                       borderRadius: 10,
-                                      padding: 0,
-                                      overflow: "hidden",
-                                      cursor: u ? "pointer" : "default",
-                                      opacity: u ? 1 : 0.35,
-                                      aspectRatio: "1 / 1",
+                                      padding: 14,
+                                      fontSize: 12,
+                                      opacity: 0.7,
+                                      background: "#fff",
                                     }}
-                                    disabled={!u}
-                                    aria-label={`영수증 이미지 ${idx + 1} 크게보기`}
                                   >
-                                    {u ? (
+                                    이미지 없음
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: 6,
+                                    overflowX: "auto",
+                                    overflowY: "hidden",
+                                    paddingBottom: 2,
+                                    scrollSnapType: "x mandatory",
+                                    WebkitOverflowScrolling: "touch",
+                                  }}
+                                >
+                                  {urls.map((u, idx) => (
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setLightboxOpen({ urls, startIndex: idx });
+                                      }}
+                                      style={{
+                                        border: "1px solid #eee",
+                                        background: "#fff",
+                                        borderRadius: 10,
+                                        padding: 0,
+                                        overflow: "hidden",
+                                        cursor: "pointer",
+
+                                        // ✅ 3.3장 보이게
+                                        flex: "0 0 30%",
+                                        maxWidth: 160,
+                                        aspectRatio: "1 / 1",
+
+                                        scrollSnapAlign: "start",
+                                      }}
+                                      aria-label={`영수증 이미지 ${idx + 1} 크게보기`}
+                                    >
                                       <img
                                         src={u}
                                         alt={`영수증 ${idx + 1}`}
                                         style={{ width: "100%", height: "100%", objectFit: "cover" }}
                                       />
-                                    ) : (
-                                      <div
-                                        style={{
-                                          display: "grid",
-                                          placeItems: "center",
-                                          fontSize: 12,
-                                        }}
-                                      >
-                                        없음
-                                      </div>
-                                    )}
-                                  </button>
-                                ))
-                              ) : (
-                                <div style={{ gridColumn: "1 / -1", fontSize: 12, opacity: 0.7 }}>이미지 불러오는 중…</div>
-                              )}
-                            </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              );
+                            })()}
+
 
                             {/* 2) 구분선 */}
                             <div style={{ marginTop: 10, borderTop: "1px solid #E5E7EB" }} />
@@ -974,6 +1007,10 @@ export default function VendorReceiptsPage() {
               boxShadow: "0 -10px 30px rgba(0,0,0,0.12)",
               maxWidth: 420,
               margin: "0 auto",
+
+              // ✅ 여기(드로어 본체)에 스크롤/높이
+              maxHeight: "70vh",
+              overflowY: "auto",
             }}
           >
             <div style={{ display: "flex", alignItems: "center" }}>
@@ -1046,10 +1083,29 @@ export default function VendorReceiptsPage() {
               })}
             </div>
 
+            {/* ✅ 설명 박스: map 밖, grid 아래 */}
+            {statusDrawerDescription ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: "#f9f9f9",
+                  border: "1px solid #e5e5e5",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  color: "#333",
+                }}
+              >
+                {statusDrawerDescription}
+              </div>
+            ) : null}
+
             {bulkUpdating ? <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>상태 변경 중…</div> : null}
           </div>
         </>
       ) : null}
+
 
       {/* =========================
           Filter Drawer (Bottom Sheet)
@@ -1071,9 +1127,12 @@ export default function VendorReceiptsPage() {
               borderTopLeftRadius: 18,
               borderTopRightRadius: 18,
               padding: 16,
+              paddingBottom: 24,
               boxShadow: "0 -10px 30px rgba(0,0,0,0.12)",
               maxWidth: 420,
               margin: "0 auto",
+              maxHeight: "85vh",
+              overflowY: "auto",
             }}
           >
             <div style={{ display: "flex", alignItems: "center" }}>
@@ -1160,8 +1219,6 @@ export default function VendorReceiptsPage() {
                   );
                 })}
               </div>
-
-
             </div>
             {/* payment filter */}
             <div style={{ marginTop: 16 }}>

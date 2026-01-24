@@ -58,7 +58,7 @@ function paymentLabel(pm: PaymentMethod) {
 }
 
 function statusLabel(s: ReceiptStatus) {
-  if (s === "uploaded") return "업로드";
+  if (s === "uploaded") return "요청대기";
   if (s === "requested") return "요청중";
   if (s === "needs_fix") return "수정필요";
   return "완료";

@@ -377,24 +377,54 @@ export default function NewReceiptPage() {
     whiteSpace: "nowrap",
   };
 
+  const [hoverStatus, setHoverStatus] = useState<ReceiptStatus | null>(null);
+
+  
+  const statusDescriptions = useMemo<Record<ReceiptStatus, string>>(() => {
+    const isSupported = invoiceCapability === "supported";
+    
+    return {
+      uploaded: isSupported
+        ? "영수증을 업로드했지만 아직 세금계산서 발행 요청을 하지 않은 상태입니다. 준비가 되면 '계산서 발행 요청' 버튼을 누르세요."
+        : "영수증을 업로드했지만 아직 세금계산서 발행 요청을 하지 않은 상태입니다. 준비가 끝나면 내보내기 버튼을 통해 상가에 계산서 발행을 요청하고 상태를 '요청중'으로 변경해 보세요. (발행 연동 미지원 상가)",
+      requested: isSupported
+        ? "세금계산서 발행을 요청한 상태입니다. 상가에서 처리 중입니다."
+        : "세금계산서 발행을 요청한 상태입니다. 계산서 발행이 확인되면 상태를 '완료'로 변경해 주세요.",
+      needs_fix: "세금계산서 발행 요청에 문제가 있어 수정이 필요한 상태입니다. 영수증 정보를 확인하고 수정해주세요.",
+      completed: "세금계산서 발행이 완료된 상태입니다.",
+    };
+  }, [invoiceCapability]);
+
+  const activeStatusForDescription = hoverStatus ?? effectiveStatus;
+
+  // ✅ vendor 페이지는 invoiceCapability가 로딩 전(null)일 수 있으니 기본 문구 처리
+  const statusDescription = useMemo(() => {
+    if (invoiceCapability === null) return "상태별 안내";
+    return statusDescriptions[activeStatusForDescription];
+  }, [invoiceCapability, statusDescriptions, activeStatusForDescription]);
+
   const StatusButton = (key: ReceiptStatus, label: string, s: React.CSSProperties) => {
     const selected = effectiveStatus === key;
     const disabled = receiptType === "simple";
     return (
-      <button
-        type="button"
-        onClick={() => setStatus(key)}
-        disabled={disabled}
-        style={{
-          ...pillBase,
-          opacity: disabled ? 0.5 : 1,
-          border: selected ? s.border : "1px solid #ddd",
-          color: selected ? s.color : "#111",
-          background: selected ? s.background : "white",
-        }}
-      >
-        {label}
-      </button>
+      <div style={{ position: "relative" }}>
+        <button
+          type="button"
+          onClick={() => {setStatus(key)}}
+          onMouseEnter={() => setHoverStatus(key)}
+          onMouseLeave={() => setHoverStatus(null)}
+          disabled={disabled}
+          style={{
+            ...pillBase,
+            opacity: disabled ? 0.5 : 1,
+            border: selected ? s.border : "1px solid #ddd",
+            color: selected ? s.color : "#111",
+            background: selected ? s.background : "white",
+          }}
+        >
+          {label}
+        </button>
+      </div>
     );
   };
 
@@ -589,11 +619,28 @@ export default function NewReceiptPage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000000", background: "#ffffff" })}
-            {StatusButton("requested", "요청중", { border: "3px solid #8dafe6", color: "#000000", background: "#c1d2ee" })}
-            {StatusButton("needs_fix", "수정필요", { border: "3px solid #efa6a3", color: "#000000", background: "#f3cfce" })}
-            {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#000000", background: "#eae9e9" })}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {StatusButton("uploaded", "요청대기", { border: "3px solid #0e0e0e", color: "#000000", background: "#ffffff" })}
+              {StatusButton("requested", "요청중", { border: "3px solid #8dafe6", color: "#000000", background: "#c1d2ee" })}
+              {StatusButton("needs_fix", "수정필요", { border: "3px solid #efa6a3", color: "#000000", background: "#f3cfce" })}
+              {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#000000", background: "#eae9e9" })}
+            </div>
+            {statusDescription && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: "#f9f9f9",
+                  border: "1px solid #e5e5e5",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  color: "#333",
+                }}
+              >
+                {statusDescription}
+              </div>
+            )}
           </div>
         </div>
 

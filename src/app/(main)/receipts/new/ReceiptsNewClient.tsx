@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { Plus, Camera, X, Search } from "lucide-react";
+import ReceiptLightbox from "@/components/ReceiptLightbox";
 
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
@@ -16,7 +18,7 @@ type ReceiptImageRow = {
   receipt_id: string;
   user_id: string;
   path: string;
-  sort_order: number; // 1~3
+  sort_order: number; 
   created_at: string;
 };
 
@@ -43,7 +45,12 @@ type ReceiptRowForEdit = {
   image_path: string | null;
 };
 
-const MAX_IMAGES = 3;
+type ExistingImage = {
+  id: string;
+  path: string;
+  url: string | null;
+  sort_order: number;
+}
 
 function todayYYYYMMDD() {
   const d = new Date();
@@ -166,12 +173,62 @@ export default function ReceiptsNewClient() {
   const filePickerRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
 
-  const [files, setFiles] = useState<Array<File | null>>([null, null, null]);
-  const [previews, setPreviews] = useState<Array<string | undefined>>([
-    undefined,
-    undefined,
-    undefined,
-  ]);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [newPreviews, setNewPreviews] = useState<string[]>([]);
+
+  const [existingImages, setExistingImages] = useState<ExistingImage[]>([]);
+  const [existingRowsAll, setExistingRowsAll] = useState<ReceiptImageRow[]>([]);
+  const [existingRows, setExistingRows] = useState<ReceiptImageRow[]>([]);
+
+  const allPreviewItems = useMemo(() => {
+    const existing = existingImages
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((x) => ({
+        key: `ex_${x.path}`,
+        src: x.url, // signed url
+        kind: "existing" as const,
+      }))
+      .filter((x) => !!x.src);
+
+    const news = newPreviews.map((src, idx) => ({
+      key: `new_${idx}_${src}`,
+      src,
+      kind: "new" as const,
+    }));
+
+    return [...existing, ...news];
+  }, [existingImages, newPreviews]);
+  
+  async function toSignedUrl(path: string) {
+  const { data, error } = await supabase.storage.from("receipts").createSignedUrl(path, 60 * 10);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+  }
+
+  useEffect(() => {
+    if (!isEditMode) return;
+    if (existingRows.length === 0) {
+      setExistingImages([]);
+      return;
+    }
+
+    (async () => {
+      const urls = await Promise.all(existingRows.map((r) => toSignedUrl(r.path)));
+      const next: ExistingImage[] = existingRows.map((r, idx) => ({
+        id: r.id,
+        path: r.path,
+        url: urls[idx],
+        sort_order: r.sort_order,
+      }));
+      setExistingImages(next);
+    })();
+  }, [isEditMode, existingRows]);
+
+
+  // lightbox
+  const [lbOpen, setLbOpen] = useState(false);
+  const [lbIndex, setLbIndex] = useState(0);
 
   const [amountDigits, setAmountDigits] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
@@ -182,18 +239,12 @@ export default function ReceiptsNewClient() {
   const [memo, setMemo] = useState<string>("");
 
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetSlot, setSheetSlot] = useState<number | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
 
   // edit-mode helpers
   const [loadingEdit, setLoadingEdit] = useState(false);
-
-// ✅ edit-mode: 기존 이미지(슬롯별 path + signedUrl)
-const [existingPaths, setExistingPaths] = useState<Array<string | null>>([null, null, null]);
-const [existingUrls, setExistingUrls] = useState<Array<string | null>>([null, null, null]);
-const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,null,null]);
 
   const effectiveStatus = useMemo<ReceiptStatus>(() => {
     return receiptType === "simple" ? "completed" : status;
@@ -204,21 +255,11 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     [amountDigits]
   );
 
-  const selectedCount = useMemo(() => {
-    const newCount = files.filter(Boolean).length;
-    const existingCount = existingPaths.filter(Boolean).length;
-    return newCount + existingCount;
-  }, [files, existingPaths]);
-
-
-  const hasAnyNewFile = useMemo(() => files.some(Boolean), [files]);
-
   const hasAnyReceiptImage = useMemo(() => {
-    if (files.some(Boolean)) return true; // 새 파일 1개라도 있으면 OK
-    // 수정모드에서 기존 슬롯 중 하나라도 남아있으면 OK
-    if (isEditMode && existingPaths.some((p) => !!p)) return true;
+    if (newFiles.length > 0) return true; 
+    if (isEditMode && existingImages.length > 0) return true;
     return false;
-  }, [files, isEditMode, existingPaths]);
+  }, [newFiles.length, isEditMode, existingImages.length]);
 
 
   // ---------- Load vendors ----------
@@ -295,7 +336,7 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
         setStatus((r.status as ReceiptStatus) ?? "uploaded");
         setMemo(r.memo ?? "");
 
-        // ✅ receipt_images에서 1~3 로드
+        // ✅ receipt_images 로드
         const { data: imgs, error: imgErr } = await supabase
           .from("receipt_images")
           .select("id, receipt_id, user_id, path, sort_order, created_at")
@@ -305,31 +346,15 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
 
         if (imgErr) throw imgErr;
 
-        const nextPaths: Array<string | null> = [null, null, null];
-        (imgs ?? []).forEach((it: any) => {
-          const so = Number(it.sort_order);
-          if (so >= 1 && so <= 3 && it.path) nextPaths[so - 1] = it.path;
-        });
-        setExistingPaths(nextPaths);
-        setOriginalPaths(nextPaths);
+        setExistingRowsAll(imgs ?? []);
+        setExistingRows(imgs ?? []);
 
-        // signed url 3장 병렬 생성
-        const signed = await Promise.all(
-          nextPaths.map(async (p) => {
-            if (!p) return null;
-            const { data: s, error: sErr } = await supabase.storage
-              .from("receipts")
-              .createSignedUrl(p, 60 * 60);
-            if (sErr) return null;
-            return s?.signedUrl ?? null;
-          })
-        );
-        setExistingUrls(signed);
-
-        // 새 파일 선택 상태는 초기화
-        setFiles([null, null, null]);
-      } catch (e: any) {
-        // 업로드는 됐는데 DB에서 실패한 경우 고아 파일 제거(최선의 노력)
+        const paths = (imgs ?? [])
+          .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+          .map((x: any) => x.path)
+          .filter(Boolean);
+      
+      } catch (e:any) {
         setMsg(e?.message ?? "수정 로드 오류");
       } finally {
         if (!ignore) setLoadingEdit(false);
@@ -340,7 +365,7 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
       ignore = true;
     };
   }, [isEditMode, editId, vendors.length]);
-
+          
   // ---------- Dropdown: outside click 닫기 ----------
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -366,14 +391,16 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     });
   }, [searchQuery, vendors]);
 
-  // ---------- Preview URLs (new files only) ----------
   useEffect(() => {
-    previews.forEach((u) => u && URL.revokeObjectURL(u));
-    const next = files.map((f) => (f && typeof window !== "undefined" ? URL.createObjectURL(f) : undefined));
-    setPreviews(next);
-    return () => next.forEach((u) => u && URL.revokeObjectURL(u));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files]);
+  // 이전 url revoke
+  newPreviews.forEach((u) => u && URL.revokeObjectURL(u));
+
+  const next = newFiles.map((f) => URL.createObjectURL(f));
+  setNewPreviews(next);
+
+  return () => next.forEach((u) => u && URL.revokeObjectURL(u));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [newFiles]);
 
   // ---------- Vendor select handler ----------
   const handleVendorSelect = (v: VendorOption) => {
@@ -382,104 +409,45 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     setShowDropdown(false);
   };
 
-  // ---------- Image handlers ----------
-  function setFileAtSlot(slot: number, file: File) {
-    setFiles((prev) => {
-      const next = [...prev];
-      next[slot] = file;
-      return next;
-    });
-  }
+// ---------- Image handlers (unlimited) ----------
+function openAddSheet() {
+  setSheetOpen(true);
+}
 
-  function removeImageAt(idx: number) {
-    setFiles((prev) => {
-      const next = [...prev];
-      next[idx] = null;
-      return next;
-    });
-  }
+function closeSheet() {
+  setSheetOpen(false);
+}
 
-  function openSheetForSlot(slot: number) {
-    if (files[slot]) return;
-    setSheetSlot(slot);
-    setSheetOpen(true);
-  }
+function removeNewAt(i: number) {
+  setNewFiles((prev) => prev.filter((_, idx) => idx !== i));
+}
 
-  function closeSheet() {
-    setSheetOpen(false);
-    setSheetSlot(null);
-  }
+function removeExistingByPath(path: string) {
+  setExistingRows((prev) => prev.filter((r) => r.path !== path));
+  setExistingImages((prev) => prev.filter((img) => img.path !== path));
+}
 
-  function findFirstEmptySlot() {
-    for (let i = 0; i < 3; i++) {
-      if (!files[i] && !existingPaths[i]) return i;
+// 여러 장 선택/촬영 → 전부 webp 변환 후 추가
+async function addFilesAsWebp(list: FileList | null) {
+  if (!list || list.length === 0) return;
+
+  setMsg("");
+
+  try {
+    const rawList = Array.from(list);
+    const converted: File[] = [];
+
+    for (let i = 0; i < rawList.length; i++) {
+      const webp = await fileToWebpResized(rawList[i], newFiles.length + i);
+      converted.push(webp);
     }
-    return -1;
+
+    setNewFiles((prev) => [...prev, ...converted]);
+  } catch (e: any) {
+    console.error(e);
+    setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
   }
-
-  function openCameraQuick() {
-    if (selectedCount >= MAX_IMAGES) return;
-    const slot = findFirstEmptySlot();
-    if (slot === -1) return;
-    setSheetSlot(slot);
-    cameraRef.current?.click();
-  }
-
-  async function onPickFromFile(inputFiles: FileList | null) {
-    if (!inputFiles || inputFiles.length === 0) return;
-    if (sheetSlot === null) return;
-
-    const f = inputFiles[0];
-    if (filePickerRef.current) filePickerRef.current.value = "";
-    closeSheet();
-
-    await processPickedFile(sheetSlot, f);
-  }
-
-  async function onPickFromCamera(inputFiles: FileList | null) {
-    if (!inputFiles || inputFiles.length === 0) return;
-  
-    const slot = sheetSlot ?? findFirstEmptySlot();
-    if (slot === -1) {
-      setMsg("이미지는 최대 3장까지 가능합니다.")
-      return;
-    }
-  
-    const f  = inputFiles[0];
-    if (cameraRef.current) cameraRef.current.value = "";
-    closeSheet();
-
-    await processPickedFile(slot, f);
-  }
-
-  async function processPickedFile(slot: number, rawFile: File) {
-    setMsg("");
-
-    try {
-      // ✅ webp 변환/리사이즈
-      const webp = await fileToWebpResized(rawFile, slot);
-
-      // ✅ 수정모드에서 기존 이미지가 있었다면 "교체"니까 기존 슬롯 비우기
-      if (isEditMode) {
-        setExistingPaths((prev) => {
-          const next = [...prev];
-          next[slot] = null;
-          return next;
-        });
-        setExistingUrls((prev) => {
-          const next = [...prev];
-          next[slot] = null;
-          return next;
-        });
-      }
-
-      // ✅ 새 파일로 세팅 (previews는 files 기반으로 자동 생성됨)
-      setFileAtSlot(slot, webp);
-    } catch (e: any) {
-      console.error("image convert error:", e);
-      setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
-    }
-  }
+}
 
   // ---------- Save / Update ----------
   async function onSave() {
@@ -515,7 +483,6 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     setSaving(true);
 
     let uploadedNow: string[] = [];
-    const beforePaths = isEditMode ? [...originalPaths] : [null, null, null];
 
     try {
       const { data: authData, error: authErr } = await supabase.auth.getUser();
@@ -524,89 +491,79 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
       const userId = authData?.user?.id ?? null;
       if (!userId) throw new Error("로그인이 필요합니다.");
 
-      // 업로드(새 파일이 있으면 첫 장만 image_path로 사용)
-      // 슬롯별 최종 path (1~3)
-      let finalPaths: Array<string | null> = [null, null, null];
+    // A) before / after (기존 이미지) path 계산
+    const beforePaths = isEditMode ? (existingRowsAll.map(r => r.path).filter(Boolean)) : [];
+    const afterExistingPaths = isEditMode ? (existingRows.map(r => r.path).filter(Boolean)) : [];
 
-      // 수정모드에서는 기존 path를 기본으로 깔고 시작
-      if (isEditMode) {
-        finalPaths = [...existingPaths];
-      }
-
-      const actualFiles = files.filter((f): f is File => !!f);
-      if (actualFiles.length > 0) {
-        const ts = Date.now();
-
-          for (let idx = 0; idx < 3; idx++) {
-            const f = files[idx];
-            if (!f) continue;
-        
-        const path = `${userId}/${selectedVendor.id}/${ts}_${idx + 1}.webp`;
+    // B) 새 파일 업로드 (무제한)
+    const newPaths: string[] = [];
+    if (newFiles.length > 0) {
+      const ts = Date.now();
+      for (let i = 0; i < newFiles.length; i++) {
+        const f = newFiles[i];
+        const path = `${userId}/${selectedVendor.id}/${ts}_${i + 1}.webp`;
 
         const { error: upErr } = await supabase.storage
           .from("receipts")
-          .upload(path, f, { 
+          .upload(path, f, {
             upsert: false,
             contentType: "image/webp",
             cacheControl: "3600",
           });
 
         if (upErr) throw upErr;
-        finalPaths[idx] = path;
+
+        newPaths.push(path);
         uploadedNow.push(path);
-        }
       }
-
-      const pathsToDelete: string[] = [];
-      for (let i = 0; i < 3; i++) {
-        const before = beforePaths[i];
-        const after = finalPaths[i];
-
-        // before가 있었는데 after가 없거나(after=null), 다른 파일로 바뀌면 삭제 대상
-        if (before && (!after || before !== after)) {
-          pathsToDelete.push(before);
-        }
     }
 
-      const payload = {
-        vendor_id: selectedVendor.id,
-        amount: a,
-        payment_method: paymentMethod,
-        deposit_date: paymentMethod === "transfer" ? depositDate : null,
-        receipt_type: receiptType,
-        status: effectiveStatus,
-        image_path: finalPaths[0],
-        receipt_date: purchaseDate,
-        memo: memo,
-      };
+    // C) afterPaths = (기존 유지) + (새로 업로드)
+    const afterPaths = [...afterExistingPaths, ...newPaths];
 
-      if (!isEditMode) {
-        const { data: inserted, error: insErr } = await supabase
-          .from("receipts")
-          .insert({ ...payload, user_id: userId })
-          .select("id")
-          .maybeSingle();
+    // D) payload 대표 이미지(image_path) = 첫 장
+    const payload = {
+      vendor_id: selectedVendor.id,
+      amount: a,
+      payment_method: paymentMethod,
+      deposit_date: paymentMethod === "transfer" ? depositDate : null,
+      receipt_type: receiptType,
+      status: effectiveStatus,
+      image_path: afterPaths[0] ?? null,
+      receipt_date: purchaseDate,
+      memo: memo,
+    };
 
-        if (insErr) throw insErr;
-        const newReceiptId = inserted?.id;
-        if (!newReceiptId) throw new Error("영수증 ID를 가져오지 못했습니다.");
+    // E) 등록
+    if (!isEditMode) {
+      const { data: inserted, error: insErr } = await supabase
+        .from("receipts")
+        .insert({ ...payload, user_id: userId })
+        .select("id")
+        .maybeSingle();
 
-        // receipt_images insert (있는 슬롯만)
-        const rows = finalPaths
-          .map((p, idx) => (p ? { receipt_id: newReceiptId, user_id: userId, path: p, sort_order: idx + 1 } : null))
-          .filter(Boolean);
+      if (insErr) throw insErr;
+      const newReceiptId = inserted?.id;
+      if (!newReceiptId) throw new Error("영수증 ID를 가져오지 못했습니다.");
 
-        if (rows.length > 0) {
-          const { error: imgInsErr } = await supabase.from("receipt_images").insert(rows as any);
-          if (imgInsErr) throw imgInsErr;
-        }
+      const rows = afterPaths.map((path, idx) => ({
+        receipt_id: newReceiptId,
+        user_id: userId,
+        path,
+        sort_order: idx + 1,
+      }));
 
-        router.push("/receipts");
-        router.refresh();
-        return;
+      if (rows.length > 0) {
+        const { error: imgInsErr } = await supabase.from("receipt_images").insert(rows as any);
+        if (imgInsErr) throw imgInsErr;
       }
 
-      // UPDATE receipts
+      router.push("/receipts");
+      router.refresh();
+      return;
+    }
+
+    // F) 수정: receipts 업데이트
     const { error: upErr2 } = await supabase
       .from("receipts")
       .update(payload)
@@ -615,42 +572,61 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
 
     if (upErr2) throw upErr2;
 
-    // receipt_images 반영
-    for (let idx = 0; idx < 3; idx++) {
-      const so = idx + 1;
-      const path = finalPaths[idx];
+    // G) 수정: 새로 추가된 이미지 rows만 append insert
+    if (newPaths.length > 0) {
+      const lastSortOrder =
+        existingRows.length > 0
+          ? Math.max(...existingRows.map((r) => r.sort_order ?? 0))
+          : 0;
 
-      if (path) {
-        // ✅ upsert: (receipt_id, sort_order) unique 가정
-        const { error: imgUpErr } = await supabase
-          .from("receipt_images")
-          .upsert(
-            { receipt_id: editId!, user_id: userId, path, sort_order: so },
-            { onConflict: "receipt_id,sort_order" }
-          );
+      const appendRows = newPaths.map((path, idx) => ({
+        receipt_id: editId!,
+        user_id: userId,
+        path,
+        sort_order: lastSortOrder + idx + 1,
+      }));
 
-        if (imgUpErr) throw imgUpErr;
-      } else {
-        // ✅ 슬롯 비워졌으면 해당 row 삭제
-        const { error: imgDelErr } = await supabase
-          .from("receipt_images")
-          .delete()
-          .eq("receipt_id", editId!)
-          .eq("user_id", userId)
-          .eq("sort_order", so);
-
-        if (imgDelErr) throw imgDelErr;
-      }
+      const { error: imgInsErr } = await supabase.from("receipt_images").insert(appendRows as any);
+      if (imgInsErr) throw imgInsErr;
     }
 
-    // C) DB 반영 성공 후 스토리지 파일 삭제
+    // H) 삭제된 기존 이미지 처리 (DB + storage)  ⭐️ 이게 네가 헷갈린 C 구간
+    const pathsToDelete = beforePaths.filter((p) => !afterExistingPaths.includes(p));
+
     if (pathsToDelete.length > 0) {
+      // DB row 삭제
+      const { error: imgDelErr } = await supabase
+        .from("receipt_images")
+        .delete()
+        .eq("receipt_id", editId!)
+        .eq("user_id", userId)
+        .in("path", pathsToDelete);
+
+      if (imgDelErr) throw imgDelErr;
+
+      // storage 파일 삭제
       const { error: rmErr } = await supabase.storage.from("receipts").remove(pathsToDelete);
       if (rmErr) console.error("storage remove failed", rmErr);
     }
 
-    setOriginalPaths(finalPaths);
-    setExistingPaths(finalPaths);
+    // I) 성공 후 상태 갱신
+    setExistingRowsAll([...existingRows, ...newPaths.map((p, idx) => ({
+      id: `new_${Date.now()}_${idx}`,
+      receipt_id: editId!,
+      user_id: userId,
+      path: p,
+      sort_order: (existingRows.length > 0 ? Math.max(...existingRows.map(r => r.sort_order ?? 0)) : 0) + idx + 1,
+      created_at: new Date().toISOString(),
+    }))]);
+
+    setExistingRows((prev) => [...prev, ...newPaths.map((p, idx) => ({
+      id: `new_${Date.now()}_${idx}`,
+      receipt_id: editId!,
+      user_id: userId,
+      path: p,
+      sort_order: (prev.length > 0 ? Math.max(...prev.map(r => r.sort_order ?? 0)) : 0) + idx + 1,
+      created_at: new Date().toISOString(),
+    }))]);
 
     // redirect
     if (fromVendor) router.push(`/vendors/${fromVendor}`);
@@ -686,153 +662,54 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     whiteSpace: "nowrap",
   };
 
+  const [hoverStatus, setHoverStatus] = useState<ReceiptStatus | null>(null);
+    
+  const statusDescriptions = useMemo<Record<ReceiptStatus, string>>(() => {
+  const isSupported = selectedVendor?.invoice_capability === "supported";
+    return {
+      uploaded: isSupported
+        ? "영수증을 업로드했지만 아직 세금계산서 발행 요청을 하지 않은 상태입니다. 준비가 되면 '계산서 발행 요청' 버튼을 누르세요."
+        : "영수증을 업로드했지만 아직 세금계산서 발행 요청을 하지 않은 상태입니다. 준비가 끝나면 내보내기 버튼을 통해 상가에 계산서 발행을 요청하고 상태를 '요청중'으로 변경해 보세요. (발행 연동 미지원 상가)",
+      requested: isSupported
+        ? "세금계산서 발행을 요청한 상태입니다. 상가에서 처리 중입니다."
+        : "세금계산서 발행을 요청한 상태입니다. 계산서 발행이 확인되면 상태를 '완료'로 변경해 주세요.",
+      needs_fix: "세금계산서 발행 요청에 문제가 있어 수정이 필요한 상태입니다. 영수증 정보를 확인하고 수정해주세요.",
+      completed: "세금계산서 발행이 완료된 상태입니다.",
+    };
+  }, [selectedVendor?.invoice_capability]);
+
+  const activeStatusForDescription = hoverStatus ?? effectiveStatus;
+
+  // ✅ 상가 선택 전에는 안내 문구(원하는 문구로 바꿔도 됨)
+  const statusDescription = useMemo(() => {
+    if (!selectedVendor) return "상태별 안내";
+    return statusDescriptions[activeStatusForDescription];
+  }, [selectedVendor, statusDescriptions, activeStatusForDescription]);
+
   const StatusButton = (key: ReceiptStatus, label: string, s: React.CSSProperties) => {
     const selected = effectiveStatus === key;
     const disabled = receiptType === "simple";
     return (
-      <button
-        type="button"
-        onClick={() => setStatus(key)}
-        disabled={disabled}
-        style={{
-          ...pillBase,
-          opacity: disabled ? 0.5 : 1,
-          border: selected ? (s as any).border : "1px solid #ddd",
-          color: selected ? (s as any).color : "#111",
-          background: selected ? (s as any).background : "white",
-        }}
-      >
-        {label}
-      </button>
+      <div style={{ position: "relative" }}>
+        <button
+          type="button"
+          onClick={() => {setStatus(key)}}
+          onMouseEnter={() => setHoverStatus(key)}
+          onMouseLeave={() => setHoverStatus(null)}
+          disabled={disabled}
+          style={{
+            ...pillBase,
+            opacity: disabled ? 0.5 : 1,
+            border: selected ? (s as any).border : "1px solid #ddd",
+            color: selected ? (s as any).color : "#111",
+            background: selected ? (s as any).background : "white",
+          }}
+        >
+          {label}
+        </button>
+      </div>
     );
   };
-
-  function ThumbSlot({ idx }: { idx: number }) {
-  const hasNewFile = !!files[idx];
-  const previewUrl = previews[idx];
-  const showNew = hasNewFile && previewUrl;
-
-  const existingUrl = existingUrls[idx];
-  const showExisting = !showNew && !!existingUrl; // 새 파일이 없을 때만 기존 노출
-
-  const canPick = !hasNewFile; // 새 파일 있을 땐 클릭으로 교체 못하게(원하면 교체 허용도 가능)
-
-  return (
-    <div style={{ width: "33.3333%", boxSizing: "border-box" }}>
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          aspectRatio: "1 / 1",
-          borderRadius: 14,
-          border: "1px solid #ddd",
-          background: "#fff",
-          overflow: "hidden",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: canPick ? "pointer" : "default",
-        }}
-        onClick={() => {
-          // 슬롯에 새 파일이 없을 때만 선택 sheet
-          if (!hasNewFile) openSheetForSlot(idx);
-        }}
-      >
-        {showNew ? (
-          <>
-            <img
-              src={previewUrl}
-              alt={`영수증 ${idx + 1}`}
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-            />
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                removeImageAt(idx);
-              }}
-              style={{
-                position: "absolute",
-                top: 6,
-                right: 6,
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-                border: "1px solid #ddd",
-                background: "rgba(255,255,255,0.92)",
-                fontWeight: 900,
-                cursor: "pointer",
-              }}
-            >
-              ×
-            </button>
-          </>
-        ) : showExisting ? (
-          <>
-            <img
-              src={existingUrl!}
-              alt={`기존 영수증 ${idx + 1}`}
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-            />
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                // ✅ 기존 이미지 삭제(슬롯 비움)
-                setExistingPaths((prev) => {
-                  const next = [...prev];
-                  next[idx] = null;
-                  return next;
-                });
-                setExistingUrls((prev) => {
-                  const next = [...prev];
-                  next[idx] = null;
-                  return next;
-                });
-              }}
-              style={{
-                position: "absolute",
-                top: 6,
-                right: 6,
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-                border: "1px solid #ddd",
-                background: "rgba(255,255,255,0.92)",
-                fontWeight: 900,
-                cursor: "pointer",
-              }}
-              title="기존 이미지 제거"
-            >
-              ×
-            </button>
-
-            {/* 기존 이미지일 때 교체 힌트 */}
-            <div
-              style={{
-                position: "absolute",
-                left: 8,
-                bottom: 8,
-                padding: "4px 8px",
-                borderRadius: 999,
-                border: "1px solid rgba(0,0,0,0.12)",
-                background: "rgba(255,255,255,0.9)",
-                fontSize: 12,
-                fontWeight: 900,
-                opacity: 0.9,
-              }}
-            >
-              기존
-            </div>
-          </>
-        ) : (
-          <div style={{ fontSize: 28, fontWeight: 900, opacity: 0.55 }}>+</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 
   const marketBadgeStyle: React.CSSProperties = {
     fontSize: 13,
@@ -851,6 +728,43 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
     : isEditMode
     ? "수정 저장"
     : "저장";
+
+  // existing + new를 한 배열로(원하면 existing 먼저, new 나중)
+  const thumbItems = useMemo(() => {
+    const existing = (isEditMode ? existingImages : [])
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((img, idx) => ({
+        key: `ex_${img.path}`,
+        kind: "existing" as const,
+        src: img.url,
+        index: idx, // lightbox index 계산용
+        exists: !!img.url,
+      }))
+      .filter((x) => x.exists);
+
+    const news = newPreviews.map((src, idx) => ({
+      key: `new_${idx}_${src}`,
+      kind: "new" as const,
+      src,
+      index: idx,
+      exists: true,
+    }));
+
+    const merged = [...existing, ...news];
+
+    // ✅ 최소 3칸 유지용 placeholder 채우기
+    const fill = Math.max(0, 3 - merged.length);
+    const placeholders = Array.from({ length: fill }).map((_, i) => ({
+      key: `ph_${i}`,
+      kind: "placeholder" as const,
+      src: null as any,
+      index: -1,
+      exists: false,
+    }));
+
+    return [...merged, ...placeholders];
+  }, [isEditMode, existingImages, newPreviews]);
 
   return (
     <div style={{ margin: "0 auto", padding: 0 }}>
@@ -891,7 +805,11 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
         type="file"
         accept={IMAGE_ACCEPT}
         style={{ display: "none" }}
-        onChange={(e) => onPickFromFile(e.target.files)}
+        onChange={(e) => {
+          addFilesAsWebp(e.target.files);
+          if (filePickerRef.current) filePickerRef.current.value = "";
+          closeSheet();
+        }}
       />
       <input
         ref={cameraRef}
@@ -899,7 +817,11 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
         accept={IMAGE_ACCEPT}
         capture="environment"
         style={{ display: "none" }}
-        onChange={(e) => onPickFromCamera(e.target.files)}
+        onChange={(e) => {
+          addFilesAsWebp(e.target.files);
+          if (cameraRef.current) cameraRef.current.value = "";
+          closeSheet();
+        }}
       />
 
       <div style={{ marginTop: 9, display: "grid", gap: 14 }}>
@@ -919,11 +841,11 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
               opacity: loadingEdit ? 0.6 : 1,
             }}
           >
-            <span style={{ flexShrink: 0 }}>
-              {selectedVendor ? capabilityDot(selectedVendor.invoice_capability) : "🔍"}
+            <span style={{ flexShrink: 0, display: "flex", alignItems: "center", marginLeft: 5 }}>
+              {selectedVendor ? capabilityDot(selectedVendor.invoice_capability) : <Search size={18} />}
             </span>
             <input
-              placeholder="상가명 또는 호수 검색"
+              placeholder="상가명 검색"
               value={searchQuery}
               disabled={loadingEdit}
               onChange={(e) => {
@@ -937,8 +859,9 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
                 padding: "10px 0",
                 border: "none",
                 outline: "none",
-                fontSize: 16,
-                fontWeight: 800,
+                marginLeft: 10,
+                fontSize: 18,
+                fontWeight: 600,
                 background: "transparent",
               }}
             />
@@ -1052,41 +975,163 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
 
         {/* 영수증 사진 */}
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>영수증 사진</div>
+          {/* 왼쪽 라벨 */}
+          <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10, whiteSpace: "nowrap" }}>
+            영수증 사진
+          </div>
+
+          {/* 오른쪽: 1) 헤더(카메라) 2) 썸네일 그리드 */}
           <div style={{ width: "100%" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 8 }}>
+            {/* 1) 카메라 버튼 (영수증사진과 같은 행) */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", paddingTop: 10 }}>
               <button
                 type="button"
-                onClick={openCameraQuick}
-                disabled={loadingEdit || selectedCount >= MAX_IMAGES}
+                onClick={openAddSheet}
+                disabled={loadingEdit}
                 style={{
                   border: "none",
                   background: "transparent",
-                  fontSize: 27,
-                  opacity: loadingEdit || selectedCount >= MAX_IMAGES ? 0.35 : 0.9,
                   padding: 0,
+                  lineHeight: 0,
+                  opacity: loadingEdit ? 0.4 : 0.9,
+                  cursor: loadingEdit ? "default" : "pointer",
                 }}
+                aria-label="영수증 사진 추가"
               >
-                📷
+                <Camera size={22} />
               </button>
             </div>
 
-              <div style={{ display: "flex" }}>
-                <ThumbSlot idx={0} />
-                <ThumbSlot idx={1} />
-                <ThumbSlot idx={2} />
-              </div>
+            {/* 2) 썸네일: 카메라 아래에 3개씩 쌓이기 */}
+            <div
+              style={{
+                marginTop: 10,
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 100px)",
+                gap: 8,
+              }}
+            >
+              {newPreviews.map((src, i) => (
+                <div
+                  key={src}
+                  style={{
+                    width: "100%",
+                    aspectRatio: "1 / 1",
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    border: "1px solid #ddd",
+                    position: "relative",
+                  }}
+                >
+                  <img
+                    src={src}
+                    alt={`new ${i + 1}`}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
+                    onClick={() => {
+                      const offset = allPreviewItems.filter((x) => x.kind === "existing").length;
+                      setLbIndex(offset + i);
+                      setLbOpen(true);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeNewAt(i);
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 4,
+                      right: 4,
+                      width: 24,
+                      height: 24,
+                      borderRadius: 999,
+                      border: "1px solid rgba(0,0,0,0.12)",
+                      background: "rgba(255,255,255,0.92)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
 
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.65 }}>
-              최대 3장 · +를 누르면 촬영/파일 선택
-              {isEditMode ? " · (새 사진을 선택하면 기존 사진이 교체돼)" : ""}
+              {isEditMode &&
+                existingImages
+                  .slice()
+                  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+                  .map((img, i) => (
+                    <div
+                      key={img.path}
+                      style={{
+                        width: "100%",
+                        aspectRatio: "1 / 1",
+                        borderRadius: 12,
+                        overflow: "hidden",
+                        border: "1px solid #ddd",
+                        position: "relative",
+                      }}
+                    >
+                      {img.url ? (
+                        <img
+                          src={img.url}
+                          alt={`existing ${i + 1}`}
+                          style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
+                          onClick={() => {
+                            setLbIndex(i); // existing은 앞쪽
+                            setLbOpen(true);
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 12,
+                            opacity: 0.6,
+                          }}
+                        >
+                          로딩...
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeExistingByPath(img.path);
+                        }}
+                        style={{
+                          position: "absolute",
+                          top: 4,
+                          right: 4,
+                          width: 24,
+                          height: 24,
+                          borderRadius: 999,
+                          border: "1px solid rgba(0,0,0,0.12)",
+                          background: "rgba(255,255,255,0.92)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                        title="기존 이미지 제거"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  ))}
             </div>
           </div>
         </div>
 
         {/* 금액 */}
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>금액</div>
+          <div style={{ fontSize: 14, fontWeight: 800 }}>금액</div>
           <div style={{ position: "relative" }}>
             <input
               value={amountDisplay}
@@ -1094,7 +1139,7 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
               onChange={(e) => setAmountDigits(onlyDigits(e.target.value).slice(0, 12))}
               placeholder="예: 45,000"
               inputMode="numeric"
-              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 700 }}
+              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 15, fontWeight: 700 }}
             />
             <div
               style={{
@@ -1182,11 +1227,28 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
         {/* 상태 */}
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", opacity: loadingEdit ? 0.6 : 1 }}>
-            {StatusButton("uploaded", "업로드", { border: "3px solid #0e0e0e", color: "#000000", background: "#ffffff" })}
-            {StatusButton("requested", "요청중", { border: "3px solid #8dafe6", color: "#000000", background: "#c1d2ee" })}
-            {StatusButton("needs_fix", "수정필요", { border: "3px solid #efa6a3", color: "#000000", background: "#f3cfce" })}
-            {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#000000", background: "#eae9e9" })}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", opacity: loadingEdit ? 0.6 : 1 }}>
+              {StatusButton("uploaded", "요청대기", { border: "3px solid #0e0e0e", color: "#000000", background: "#ffffff" })}
+              {StatusButton("requested", "요청중", { border: "3px solid #8dafe6", color: "#000000", background: "#c1d2ee" })}
+              {StatusButton("needs_fix", "수정필요", { border: "3px solid #efa6a3", color: "#000000", background: "#f3cfce" })}
+              {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#000000", background: "#eae9e9" })}
+            </div>
+            {statusDescription && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: "#f9f9f9",
+                  border: "1px solid #e5e5e5",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  color: "#333",
+                }}
+              >
+                {statusDescription}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1255,10 +1317,6 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
               <button
                 type="button"
                 onClick={() => {
-                  const slot = sheetSlot ?? findFirstEmptySlot();
-                    if (slot === -1) return;
-                  setSheetSlot(slot);
-                  closeSheet();
                   cameraRef.current?.click();
                 }}
                 style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}
@@ -1289,6 +1347,14 @@ const [originalPaths, setOriginalPaths] = useState<Array<string | null>>([null,n
           </div>
         </div>
       )}
+      {lbOpen && allPreviewItems.length > 0 && (
+      <ReceiptLightbox
+        urls={allPreviewItems.map((x) => x.src as string)}
+        startIndex={lbIndex}
+        onClose={() => setLbOpen(false)}
+        setIndex={(i: number) => setLbIndex(i)}
+      />
+    )}
     </div>
   );
 }

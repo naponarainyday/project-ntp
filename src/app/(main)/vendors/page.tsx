@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { ChevronDown, Search } from "lucide-react";
 
 type ReceiptStatus = "needs_fix" | "requested" | "uploaded" | "completed";
 
@@ -34,7 +35,7 @@ function capabilityDot(v: VendorRow) {
 function statusLabel(s: ReceiptStatus) {
   if (s === "needs_fix") return "수정필요";
   if (s === "requested") return "요청중";
-  if (s === "uploaded") return "업로드";
+  if (s === "uploaded") return "요청대기";
   if (s === "completed") return "완료";
   return "";
 }
