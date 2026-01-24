@@ -1,118 +1,159 @@
-'use client'
+"use client";
 
-import Link from 'next/link'
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
-
-function Skeleton() {
-  return (
-    <div className="p-6">
-      <div className="max-w-xl space-y-4">
-        <div className="h-7 w-40 rounded bg-gray-200" />
-        <div className="h-4 w-64 rounded bg-gray-200" />
-        <div className="h-20 w-full rounded bg-gray-200" />
-        <div className="h-20 w-full rounded bg-gray-200" />
-        <div className="h-20 w-full rounded bg-gray-200" />
-      </div>
-    </div>
-  )
-}
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function SettingsPage() {
-  const router = useRouter()
-  const [loading, setLoading] = useState(true)
-  const [email, setEmail] = useState<string>('')
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState("");
+  const [email, setEmail] = useState<string>("");
 
   useEffect(() => {
-    const init = async () => {
-      setLoading(true)
+    (async () => {
+      setLoading(true);
+      setMsg("");
 
-      const { data, error } = await supabase.auth.getUser()
-      const user = data?.user
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
 
-      if (error || !user) {
-        router.replace('/login')
-        return
+        const user = data?.user;
+        if (!user) {
+          router.replace("/login");
+          return;
+        }
+
+        setEmail(user.email ?? "");
+      } catch (e: any) {
+        console.log("SETTINGS LOAD ERROR:", e);
+        setMsg(e?.message ?? "불러오기 실패");
+      } finally {
+        setLoading(false);
       }
-
-      setEmail(user.email ?? '')
-      setLoading(false)
-    }
-
-    init()
-  }, [router])
+    })();
+  }, [router]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut()
-    router.replace('/login')
-  }
+    setMsg("");
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      router.replace("/login");
+    } catch (e: any) {
+      setMsg(e?.message ?? "로그아웃 실패");
+    }
+  };
 
-  if (loading) return <Skeleton />
+  const cardStyle: React.CSSProperties = {
+    border: "1px solid #ddd",
+    borderRadius: 14,
+    padding: 12,
+    background: "white",
+  };
 
   return (
-    <div className="p-6">
-      <div className="max-w-xl space-y-6">
-        <div>
-          <h1 className="text-xl font-semibold">마이페이지</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            계정과 세금계산서 발행에 필요한 정보를 관리합니다.
-          </p>
+    <div style={{ margin: "0 auto" }}>
+      <div style={{ marginTop: 0 }}>
+        <div style={{ fontSize: 15, marginBottom: 14 }}>
+          계정과 세금계산서 발행에 필요한 정보를 관리합니다.
         </div>
-
-        {/* 계정 요약 */}
-        <div className="rounded-lg border p-4">
-          <div className="text-sm text-gray-500">로그인 계정</div>
-          <div className="mt-1 font-medium">{email || '-'}</div>
-        </div>
-
-        {/* 메뉴 리스트 */}
-        <div className="space-y-3">
-          <Link
-            href="/settings/profile"
-            className="group flex items-center justify-between rounded-lg border p-4 hover:bg-gray-50 transition-colors"
-          >
-            <div>
-              <div className="font-medium group-hover:text-blue-600 transition-colors">
-                내 정보
-              </div>
-              <div className="mt-1 text-sm text-gray-500">
-                상호명, 사업자번호, 이메일 등 세금계산서 발행 정보
-              </div>
-            </div>
-            <div className="text-gray-400">→</div>
-          </Link>
-
-          {/* 준비 중 메뉴들 */}
-          {[
-            { title: '이메일 인증', desc: '세금계산서 수신 이메일 인증' },
-            { title: '사업자 정보 유효성 확인', desc: '사업자등록번호/대표자명 검증' },
-            { title: '공동인증서', desc: '공동인증서 인증 및 연결' },
-          ].map((item) => (
-            <div
-              key={item.title}
-              className="rounded-lg border bg-gray-50/50 p-4 cursor-not-allowed opacity-60"
-              title="준비 중인 기능입니다"
-            >
-              <div className="flex items-center gap-2">
-                <div className="font-medium text-gray-900">{item.title}</div>
-                <span className="text-[10px] bg-gray-200 px-1.5 py-0.5 rounded text-gray-600">
-                  준비 중
-                </span>
-              </div>
-              <div className="mt-1 text-sm text-gray-500">{item.desc}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* 로그아웃 */}
-        <button
-          onClick={handleLogout}
-          className="w-full rounded-md border px-4 py-2 font-medium hover:bg-gray-50"
-        >
-          로그아웃
-        </button>
       </div>
+
+      {loading ? (
+        <div style={{ padding: 16, fontSize: 14, opacity: 0.8, fontWeight: 800 }}>불러오는 중...</div>
+      ) : null}
+
+      {msg ? (
+        <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9, whiteSpace: "pre-wrap" }}>{msg}</div>
+      ) : null}
+
+      {!loading ? (
+        <div style={{ marginTop: 10, display: "grid", gap: 12 }}>
+          {/* 계정 요약 */}
+          <div style={cardStyle}>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>로그인 계정</div>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>{email || "-"}</div>
+          </div>
+
+          {/* 메뉴 리스트 */}
+          <div style={{ display: "grid", gap: 10 }}>
+            <Link
+              href="/settings/profile"
+              style={{
+                ...cardStyle,
+                textDecoration: "none",
+                color: "inherit",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>내 정보</div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>
+                    상호명, 사업자번호, 이메일 등 세금계산서 발행 정보
+                  </div>
+                </div>
+                <div style={{ fontSize: 16, opacity: 0.5, marginLeft: 12 }}>→</div>
+              </div>
+            </Link>
+
+            {/* 준비 중 메뉴들 */}
+            {[
+              { title: "이메일 인증", desc: "세금계산서 수신 이메일 인증" },
+              { title: "사업자 정보 유효성 확인", desc: "사업자등록번호/대표자명 검증" },
+              { title: "공동인증서", desc: "공동인증서 인증 및 연결" },
+            ].map((item) => (
+              <div
+                key={item.title}
+                style={{
+                  ...cardStyle,
+                  background: "#f9f9f9",
+                  opacity: 0.6,
+                  cursor: "not-allowed",
+                }}
+                title="준비 중인 기능입니다"
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800 }}>{item.title}</div>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      background: "#e5e5e5",
+                      padding: "2px 6px",
+                      borderRadius: 6,
+                      fontWeight: 700,
+                    }}
+                  >
+                    준비 중
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>{item.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* 로그아웃 */}
+          <button
+            onClick={handleLogout}
+            style={{
+              width: "100%",
+              marginTop: 4,
+              padding: "12px 16px",
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              background: "white",
+              fontSize: 14,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            로그아웃
+          </button>
+        </div>
+      ) : null}
     </div>
-  )
+  );
 }

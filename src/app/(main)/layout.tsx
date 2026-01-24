@@ -79,7 +79,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       <div className="mx-auto flex min-h-screen max-w-md flex-col bg-white shadow-sm relative">
         {/* 1) 헤더 */}
         <header className="sticky top-0 z-10 bg-slate-700">
-          <div className="flex h-10 items-center justify-between px-6">
+          <div className="flex h-12 items-center justify-between px-6">
             {/* 왼쪽: 타이틀 */}
             <span className="font-bold tracking-tight text-lg text-white">
               {title}

@@ -1,26 +1,28 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 
 type Props = {
-  /** 이미지 배열 (null/빈문자/undefined는 자동 제거됨) */
   urls: Array<string | null | undefined>;
-  /** 최초로 열릴 이미지 index */
   startIndex: number;
   onClose: () => void;
+  setIndex?: (i: number) => void;
 };
 
-export default function ReceiptLightbox({ urls, startIndex, onClose }: Props) {
+export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }: Props) {
   const cleanUrls = useMemo(
     () => (urls ?? []).filter((u): u is string => !!u && typeof u === "string"),
     [urls]
   );
 
-  // urls가 없으면 렌더 안 함
   const shouldOpen = cleanUrls.length > 0 && startIndex >= 0;
   const [idx, setIdx] = useState(startIndex);
 
-  // 열릴 때 startIndex 동기화
+  useEffect(() => {
+    setIndex?.(idx);
+  }, [idx, setIndex]);
+
   useEffect(() => {
     if (!shouldOpen) return;
     const safe = Math.min(Math.max(startIndex, 0), cleanUrls.length - 1);
@@ -42,7 +44,6 @@ export default function ReceiptLightbox({ urls, startIndex, onClose }: Props) {
     setIdx((p) => Math.min(cleanUrls.length - 1, p + 1));
   };
 
-  // 키보드: ESC 닫기, ←/→ 이동
   useEffect(() => {
     if (!shouldOpen) return;
 
@@ -53,7 +54,7 @@ export default function ReceiptLightbox({ urls, startIndex, onClose }: Props) {
     };
 
     window.addEventListener("keydown", onKeyDown);
-    // 배경 스크롤 잠금
+
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
@@ -64,7 +65,6 @@ export default function ReceiptLightbox({ urls, startIndex, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldOpen, idx, cleanUrls.length]);
 
-  // 스와이프(모바일): 좌/우
   const startXRef = useRef<number | null>(null);
   const onTouchStart = (e: React.TouchEvent) => {
     startXRef.current = e.touches[0]?.clientX ?? null;
@@ -77,9 +77,7 @@ export default function ReceiptLightbox({ urls, startIndex, onClose }: Props) {
     const endX = e.changedTouches[0]?.clientX ?? startX;
     const dx = endX - startX;
 
-    // 너무 작은 스와이프는 무시
     if (Math.abs(dx) < 40) return;
-
     if (dx > 0) goPrev();
     else goNext();
   };
@@ -107,48 +105,80 @@ export default function ReceiptLightbox({ urls, startIndex, onClose }: Props) {
         style={{
           width: "100%",
           maxWidth: 420,
-          overflow: "hidden",
+          maxHeight: "calc(100dvh - 28px)",
+          display: "flex",
+          flexDirection: "column",
           background: "transparent",
           position: "relative",
+          borderRadius: 12,
+          overflow: "hidden",
         }}
       >
-        {/* Top bar */}
-        <div style={{ display: "flex", alignItems: "center", padding: 5 }}>
-          <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 800 }}>
+        {/* ✅ 카운터는 sticky로 두되, X는 floating으로 분리 */}
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 2,
+            display: "flex",
+            alignItems: "center",
+            padding: 8,
+            backdropFilter: "blur(6px)",
+            background: "rgba(0,0,0,0.20)",
+          }}
+        >
+          <div style={{ color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: 800 }}>
             {cleanUrls.length > 1 ? `${idx + 1} / ${cleanUrls.length}` : ""}
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              marginLeft: "auto",
-              background: "transparent",
-              color: "white",
-              fontSize: 30,
-              fontWeight: 900,
-              borderRadius: 10,
-              padding: "2px 10px",
-              cursor: "pointer",
-              border: "none",
-            }}
-            aria-label="닫기"
-          >
-            ✕
-          </button>
         </div>
 
-        {/* Image */}
-        <img
-          src={currentUrl}
-          alt="영수증 확대"
+        {/* ✅ Floating Close (항상 보임) */}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="닫기"
           style={{
-            width: "100%",
-            height: "auto",
-            display: "block",
-            borderRadius: 10,
+            position: "absolute",
+            top: 10,
+            right: 10,
+            zIndex: 5,
+            width: 40,
+            height: 40,
+            borderRadius: 999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+
+            // ✅ 가시성 확보 (어떤 이미지 위에서도)
+            background: "rgba(0,0,0,0.55)",
+            backdropFilter: "blur(6px)",
+            border: "1px solid rgba(255,255,255,0.18)",
+            color: "white",
+
+            cursor: "pointer",
           }}
-        />
+        >
+          <X size={22} strokeWidth={3} />
+        </button>
+
+        {/* Image scroller */}
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
+          <img
+            src={currentUrl}
+            alt="영수증 확대"
+            style={{
+              width: "100%",
+              height: "auto",
+              display: "block",
+            }}
+          />
+        </div>
 
         {/* Prev / Next buttons */}
         {cleanUrls.length > 1 ? (
