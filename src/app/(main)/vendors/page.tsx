@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { ChevronDown, Search } from "lucide-react";
 
 type ReceiptStatus = "needs_fix" | "requested" | "uploaded" | "completed";
 
