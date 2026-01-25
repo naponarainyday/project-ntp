@@ -3,15 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { Camera, X } from "lucide-react";
+import ReceiptLightbox from "@/components/ReceiptLightbox"
+
 
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type ReceiptType = "standard" | "simple";
-
+type TaxType = "tax_free" | "tax" | "zero_rate";
 type InvoiceCapability = "supported" | "not_supported" | null;
-
-const MAX_IMAGES = 3;
-const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif";
 
 function todayYYYYMMDD() {
   const d = new Date();
@@ -117,12 +117,17 @@ export default function NewReceiptPage() {
   const [marketName, setMarketName] = useState<string | null>(null);
   const [invoiceCapability, setInvoiceCapability] = useState<InvoiceCapability>(null);
 
-  const [files, setFiles] = useState<Array<File | null>>([null, null, null]);
-  // ✅ 초기값을 빈 문자열 대신 undefined로 설정
-  const [previews, setPreviews] = useState<Array<string | undefined>>([undefined, undefined, undefined]);
+  const IMAGE_ACCEPT =
+    "image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif";
+
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [newPreviews, setNewPreviews] = useState<string[]>([]);
 
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetSlot, setSheetSlot] = useState<number | null>(null);
+
+  // lightbox
+  const [lbOpen, setLbOpen] = useState(false);
+  const [lbIndex, setLbIndex] = useState(0);
 
   const [amountDigits, setAmountDigits] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
@@ -131,6 +136,7 @@ export default function NewReceiptPage() {
   const [receiptType, setReceiptType] = useState<ReceiptType>("standard");
   const [status, setStatus] = useState<ReceiptStatus>("uploaded");
   const [memo, setMemo] = useState<string>("");
+  const [taxType, setTaxType] = useState<TaxType>("tax_free");
 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string>("");
@@ -144,7 +150,30 @@ export default function NewReceiptPage() {
     [amountDigits]
   );
 
-  const selectedCount = useMemo(() => files.filter(Boolean).length, [files]);
+  const baseAmount = useMemo(() => {
+    const n = Number(amountDigits || "0");
+    return Number.isFinite(n) ? n : 0;
+  }, [amountDigits]);
+
+  const vatAmount = useMemo(() => {
+    if (taxType !== "tax") return 0;
+    return Math.round(baseAmount * 0.1);
+  }, [taxType, baseAmount]);
+
+  const totalAmount = useMemo(() => {
+    if (taxType === "tax") return baseAmount + vatAmount;
+    return baseAmount; // 면세/영세
+  }, [taxType, baseAmount, vatAmount]);
+
+  const vatAmountDisplay = useMemo(
+    () => new Intl.NumberFormat("ko-KR").format(vatAmount),
+    [vatAmount]
+  );
+
+  const totalAmountDisplay = useMemo(
+    () => new Intl.NumberFormat("ko-KR").format(totalAmount),
+    [totalAmount]
+  );
 
   useEffect(() => {
     (async () => {
@@ -183,55 +212,17 @@ export default function NewReceiptPage() {
   }, [vendorId]);
 
   useEffect(() => {
-    previews.forEach((u) => {
-      if (u) URL.revokeObjectURL(u);
-    });
+    // 이전 url revoke
+    newPreviews.forEach((u) => u && URL.revokeObjectURL(u));
 
-    // ✅ File 객체가 있을 때만 ObjectURL 생성, 없으면 undefined
-    const next = files.map((f) => (f ? URL.createObjectURL(f) : undefined));
-    setPreviews(next);
+    const next = newFiles.map((f) => URL.createObjectURL(f));
+    setNewPreviews(next);
 
-    return () => {
-      next.forEach((u) => {
-        if (u) URL.revokeObjectURL(u);
-      });
-    };
+    return () => next.forEach((u) => u && URL.revokeObjectURL(u));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files]);
+  }, [newFiles]);
 
-  function setFileAtSlot(slot: number, file: File) {
-    setFiles((prev) => {
-      const next = [...prev];
-      next[slot] = file;
-      return next;
-    });
-  }
-
-  async function processPickedFile(slot: number, rawFile: File) {
-    setMsg("");
-
-    try {
-      const webp = await fileToWebpResized(rawFile, slot);
-      setFileAtSlot(slot, webp);
-    } catch (e: any) {
-      console.error("image convert error:", e);
-      setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
-    } finally {
-      setSheetSlot(null);
-    }
-  }
-
-  function removeImageAt(idx: number) {
-    setFiles((prev) => {
-      const next = [...prev];
-      next[idx] = null;
-      return next;
-    });
-  }
-
-  function openSheetForSlot(slot: number) {
-    if (files[slot]) return;
-    setSheetSlot(slot);
+  function openAddSheet() {
     setSheetOpen(true);
   }
 
@@ -239,55 +230,54 @@ export default function NewReceiptPage() {
     setSheetOpen(false);
   }
 
-  function findFirstEmptySlot() {
-  for (let i = 0; i < 3; i++) {
-    if (!files[i]) return i;
-  }
-  return -1;
+  function removeNewAt(i: number) {
+    setNewFiles((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  function openCameraQuick() {
-    if (selectedCount >= MAX_IMAGES) return;
-    const slot = findFirstEmptySlot();
-    if (slot === -1) return;
-    setSheetSlot(slot);
-    cameraRef.current?.click();
+  // 여러 장 선택/촬영 → 전부 webp 변환 후 추가
+  async function addFilesAsWebp(list: FileList | null) {
+    if (!list || list.length === 0) return;
+
+    setMsg("");
+
+    try {
+      const rawList = Array.from(list);
+      const converted: File[] = [];
+
+      for (let i = 0; i < rawList.length; i++) {
+        const webp = await fileToWebpResized(rawList[i], newFiles.length + i);
+        converted.push(webp);
+      }
+
+      setNewFiles((prev) => [...prev, ...converted]);
+    } catch (e: any) {
+      console.error(e);
+      setMsg(e?.message ?? "이미지 변환에 실패했습니다.");
+    }
   }
 
-  async function onPickFromFile(inputFiles: FileList | null) {
-    if (!inputFiles || inputFiles.length === 0) return;
-    if (sheetSlot === null) return;
+  const hasAnyReceiptImage = useMemo(() => {
+    return newFiles.length > 0;
+  }, [newFiles.length]);
 
-    const f = inputFiles[0];
-    if (filePickerRef.current) filePickerRef.current.value = "";
-    closeSheet();
+  const allPreviewItems = useMemo(() => {
+    return newPreviews.map((src, idx) => ({
+      key: `new_${idx}_${src}`,
+      src,
+      kind: "new" as const,
+    }));
+  }, [newPreviews]);
 
-    await processPickedFile(sheetSlot, f);
-  }
-
-  async function onPickFromCamera(inputFiles: FileList | null) {
-    if (!inputFiles || inputFiles.length === 0) return;
-
-    const slot = sheetSlot ?? files.findIndex((f) => !f);
-    if (slot === -1) return;
-
-    const f = inputFiles[0];
-    if (cameraRef.current) cameraRef.current.value = "";
-    closeSheet();
-
-    await processPickedFile(slot, f);
-  }
-
-    async function onSave() {
-
-      setMsg("");
+  
+  async function onSave() {
+    setMsg("");
     if (!vendorId) { setMsg("vendorId가 없습니다."); return; }
-    if (!purchaseDate) { setMsg("구매일자를 선택해줘."); return; }
-    if (selectedCount === 0) { setMsg("영수증 사진을 최소 1장 첨부해줘."); return; }
+    if (!purchaseDate) { setMsg("구매일자를 선택해 주세요."); return; }
+    if (!hasAnyReceiptImage) { setMsg("영수증 사진을 최소 1장 첨부해 주세요."); return; }
 
-    const a = Number(amountDigits || "0");
-    if (!Number.isFinite(a) || a <= 0) { setMsg("금액을 올바르게 입력해줘."); return; }
-    if (paymentMethod === "transfer" && !depositDate) { setMsg("입금일을 선택해줘."); return; }
+    const a = baseAmount;
+    if (!Number.isFinite(a) || a <= 0) { setMsg("금액을 올바르게 입력해 주세요."); return; }
+    if (paymentMethod === "transfer" && !depositDate) { setMsg("입금일을 선택해 주세요."); return; }
 
     setSaving(true);
 
@@ -300,23 +290,21 @@ export default function NewReceiptPage() {
         return;
       }
 
-      const actualFiles = files.filter((f): f is File => !!f);
       const ts = Date.now();
       const targetVendorId = vendorId;
 
       const uploadedPaths: string[] = [];
 
       try {
-        for (let idx = 0; idx < 3; idx++) {
-          const f = files[idx];
-          if (!f) continue;
+        for (let i = 0; i < newFiles.length; i++) {
+          const f = newFiles[i];
 
           const key =
             typeof crypto !== "undefined" && "randomUUID" in crypto
               ? crypto.randomUUID()
               : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-          const path = `${userId}/${targetVendorId}/${ts}_${idx + 1}_${key}.webp`;
+          const path = `${userId}/${targetVendorId}/${ts}_${i + 1}_${key}.webp`;
 
           const { error: upErr } = await supabase.storage
             .from("receipts")
@@ -339,7 +327,10 @@ export default function NewReceiptPage() {
       const payload = {
         user_id: userId,
         vendor_id: vendorId,
-        amount: a,
+        tax_type: taxType,
+        amount: baseAmount,
+        vat_amount: vatAmount,
+        total_amount: totalAmount,
         payment_method: paymentMethod,
         deposit_date: paymentMethod === "transfer" ? depositDate : null,
         receipt_type: receiptType,
@@ -349,12 +340,38 @@ export default function NewReceiptPage() {
         memo,
       };
 
-      const { error: insErr } = await supabase.from("receipts").insert(payload);
+      const { data: inserted, error: insErr } = await supabase
+        .from("receipts")
+        .insert(payload)
+        .select("id")
+        .maybeSingle();
 
       if (insErr) {
         // ✅ DB insert 실패하면 업로드 파일 롤백
         await supabase.storage.from("receipts").remove(uploadedPaths);
         throw insErr;
+      }
+
+      const newReceiptId = inserted?.id;
+      if (!newReceiptId) {
+        await supabase.storage.from("receipts").remove(uploadedPaths);
+        throw new Error("영수증 ID를 가져오지 못했습니다.");
+      }
+
+      const imgRows = uploadedPaths.map((path, idx) => ({
+        receipt_id: newReceiptId,
+        user_id: userId,
+        path,
+        sort_order: idx+1,
+      }));
+
+      if (imgRows.length>0) {
+        const { error : imgInsErr } = await supabase.from("receipt_images").insert(imgRows as any);
+        if (imgInsErr) {
+          // 최선: storage 롤백+receipt 롤백은 여기선 생략
+          await supabase.storage.from("receipts").remove(uploadedPaths);
+          throw imgInsErr;
+        }
       }
 
       router.replace(`/vendors/${vendorId}`);
@@ -428,69 +445,6 @@ export default function NewReceiptPage() {
     );
   };
 
-  function ThumbSlot({ idx }: { idx: number }) {
-    const hasFile = !!files[idx];
-    const previewUrl = previews[idx];
-    // ✅ 파일도 있고, 프리뷰 URL도 생성된 상태여야만 img 태그를 렌더링함
-    const showImage = hasFile && previewUrl;
-
-    return (
-      <div style={{ width: "33.3333%", paddingRight: 10, boxSizing: "border-box" }}>
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            aspectRatio: "1 / 1",
-            borderRadius: 14,
-            border: "1px solid #ddd",
-            background: "#fff",
-            overflow: "hidden",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: !hasFile ? "pointer" : "default",
-          }}
-          onClick={() => {
-            if (!hasFile) openSheetForSlot(idx);
-          }}
-        >
-          {showImage ? (
-            <>
-              <img
-                src={previewUrl}
-                alt={`영수증 ${idx + 1}`}
-                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              />
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeImageAt(idx);
-                }}
-                style={{
-                  position: "absolute",
-                  top: 6,
-                  right: 6,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                  border: "1px solid #ddd",
-                  background: "rgba(255,255,255,0.92)",
-                  fontWeight: 900,
-                  cursor: "pointer",
-                }}
-              >
-                ×
-              </button>
-            </>
-          ) : (
-            <div style={{ fontSize: 28, fontWeight: 900, opacity: 0.55 }}>+</div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   const stallText = formatStallNo(stallNo);
 
   return (
@@ -499,19 +453,29 @@ export default function NewReceiptPage() {
         ref={filePickerRef}
         type="file"
         accept={IMAGE_ACCEPT}
+        multiple
         style={{ display: "none" }}
-        onChange={(e) => onPickFromFile(e.target.files)}
+        onChange={(e) => {
+          addFilesAsWebp(e.target.files);
+          if (filePickerRef.current) filePickerRef.current.value = "";
+          closeSheet();
+        }}
       />
       <input
         ref={cameraRef}
         type="file"
         accept={IMAGE_ACCEPT}
         capture="environment"
+        multiple
         style={{ display: "none" }}
-        onChange={(e) => onPickFromCamera(e.target.files)}
+        onChange={(e) => {
+          addFilesAsWebp(e.target.files);
+          if (cameraRef.current) cameraRef.current.value = "";
+          closeSheet();
+        }}
       />
 
-      <div style={{ marginTop: 6, display: "grid", gap: 14 }}>
+      <div style={{ marginTop: 0, display: "grid", gap: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>상가명</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
@@ -549,26 +513,99 @@ export default function NewReceiptPage() {
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "start", gap: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>영수증 사진</div>
+          <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10, whiteSpace: "nowrap" }}>영수증 사진</div>
           <div style={{ width: "100%" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", paddingTop: 10 }}>
               <button
                 type="button"
-                onClick={openCameraQuick}
-                disabled={selectedCount >= MAX_IMAGES}
-                style={{ border: "none", background: "transparent", fontSize: 27, opacity: selectedCount >= MAX_IMAGES ? 0.35 : 0.9, padding: 0 }}
+                onClick={openAddSheet}
+                style={{ border: "none", background: "transparent", padding: 0, lineHeight: 0, opacity: 0.9, cursor: "pointer" }}
               >
-                📷
+                <Camera size={22} />
               </button>
             </div>
-            <div style={{ display: "flex" }}>
-              <ThumbSlot idx={0} />
-              <ThumbSlot idx={1} />
-              <ThumbSlot idx={2} />
+            <div style={{ 
+              marginTop: 10,
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 100px)",
+              gap: 8,
+              }}
+              >
+                {newPreviews.map((src, i) => (
+                  <div
+                    key= {src}
+                    style={{
+                      width: "100%",
+                      aspectRatio: "1 / 1",
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      border: "1px solid #ddd",
+                      position: "relative"
+                    }}
+                  >
+                    <img
+                      src={src}
+                      alt={`new ${i + 1}`}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
+                      onClick={() => {
+                        setLbIndex(i);
+                        setLbOpen(true);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={(e)=> {
+                        e.stopPropagation();
+                        removeNewAt(i);
+                      }}
+                      style={{
+                        position: "absolute",
+                        top: 4,
+                        right: 4,
+                        width: 24,
+                        height: 24,
+                        borderRadius: 999,
+                        border: "1px solid rgba(0,0,0,0.12)",
+                        background: "rgba(255,255,255,0.92)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
             </div>
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.65 }}>
-              최대 3장 · +를 누르면 촬영/파일 선택
-            </div>
+          </div>
+        </div>
+
+        {/* 과세/면세 */}
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800 }}>과세구분</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => setTaxType("tax_free")}
+              style={{ ...pillBase, background: taxType === "tax_free" ? "#f2f2f2" : "white" }}
+            >
+              면세
+            </button>
+            <button
+              type="button"
+              onClick={() => setTaxType("tax")}
+              style={{ ...pillBase, background: taxType === "tax" ? "#f2f2f2" : "white" }}
+            >
+              과세
+            </button>
+            {/* <button
+              type="button"
+              onClick={() => setTaxType("zero_rate")}
+              title="영세(0%)"
+              style={{ ...pillBase, background: taxType === "zero_rate" ? "#f2f2f2" : "white" }}
+            >
+              영세
+            </button> */}
           </div>
         </div>
 
@@ -580,13 +617,30 @@ export default function NewReceiptPage() {
               onChange={(e) => setAmountDigits(onlyDigits(e.target.value).slice(0, 12))}
               placeholder="예: 45,000"
               inputMode="numeric"
-              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 700 }}
+              style={{ textAlign: "right", width: "90%", padding: 11, borderRadius: 12, border: "1px solid #ddd", fontSize: 15, fontWeight: 700 }}
             />
-            <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14, opacity: 0.7, fontWeight: 700 }}>
+            <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14, opacity: 0.8, fontWeight: 700 }}>
               원
             </div>
           </div>
         </div>
+
+        {taxType === "tax" && (
+          <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 12 }}>
+            <div />
+            <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span>부가세(10%)</span>
+                <span style={{ textAlign: "right", minWidth: 120, marginRight: 28 }}>{vatAmountDisplay} 원</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700 }}>
+                <span>합계금액</span>
+                <span style={{ textAlign: "right", minWidth: 120, marginRight: 28 }}>{totalAmountDisplay} 원</span>
+              </div>
+            </div>
+          </div>
+        )}
+
 
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>지급 구분</div>
@@ -686,18 +740,41 @@ export default function NewReceiptPage() {
         >
           <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420, borderRadius: 18, overflow: "hidden" }}>
             <div style={{ background: "rgba(245,245,245,0.98)", borderRadius: 18, overflow: "hidden", border: "1px solid rgba(0,0,0,0.06)" }}>
-              <button type="button" onClick={() => { 
-                const slot = sheetSlot ?? files.findIndex((f) => !f);
-                if (slot === -1) return;
-                setSheetSlot(slot);
-                closeSheet(); cameraRef.current?.click(); }} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}>카메라로 촬영</button>
+              <button
+                type="button"
+                onClick={() => {
+                  cameraRef.current?.click();
+                }}
+                style={{
+                  width: "100%",
+                  padding: "16px 14px",
+                  background: "transparent",
+                  border: "none",
+                  fontSize: 16,
+                  fontWeight: 800,
+                }}
+              >
+                카메라로 촬영
+              </button>
+
               <div style={{ height: 1, background: "rgba(0,0,0,0.08)" }} />
-              <button type="button" onClick={() => { 
-                const slot = sheetSlot ?? files.findIndex((f) => !f);
-                if (slot === -1) return;
-                setSheetSlot(slot);
-                closeSheet();
-                filePickerRef.current?.click(); }} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 800 }}>파일 선택</button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  filePickerRef.current?.click();
+                }}
+                style={{
+                  width: "100%",
+                  padding: "16px 14px",
+                  background: "transparent",
+                  border: "none",
+                  fontSize: 16,
+                  fontWeight: 800,
+                }}
+              >
+                파일 선택
+              </button>
             </div>
             <div style={{ height: 10 }} />
             <div style={{ background: "rgba(245,245,245,0.98)", borderRadius: 18, overflow: "hidden", border: "1px solid rgba(0,0,0,0.06)" }}>
@@ -705,6 +782,14 @@ export default function NewReceiptPage() {
             </div>
           </div>
         </div>
+      )}
+      {lbOpen && allPreviewItems.length > 0 && (
+        <ReceiptLightbox
+        urls={allPreviewItems.map((x) => x.src as string)}
+        startIndex={lbIndex}
+        onClose={() => setLbOpen(false)}
+        setIndex={(i: number) => setLbIndex(i)}
+        />
       )}
     </div>
   );

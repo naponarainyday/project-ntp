@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { Plus, Camera, X, Search } from "lucide-react";
 import ReceiptLightbox from "@/components/ReceiptLightbox";
 
+type TaxType = "tax_free" | "tax" | "zero_rate";
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type ReceiptType = "standard" | "simple";
@@ -35,6 +36,7 @@ interface VendorOption {
 type ReceiptRowForEdit = {
   id: string;
   vendor_id: string;
+  tax_type: TaxType | null;
   amount: number;
   payment_method: PaymentMethod;
   deposit_date: string | null;
@@ -230,6 +232,7 @@ export default function ReceiptsNewClient() {
   const [lbOpen, setLbOpen] = useState(false);
   const [lbIndex, setLbIndex] = useState(0);
 
+  const [taxType, setTaxType] = useState<TaxType>("tax_free");
   const [amountDigits, setAmountDigits] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [depositDate, setDepositDate] = useState("");
@@ -237,6 +240,33 @@ export default function ReceiptsNewClient() {
   const [receiptType, setReceiptType] = useState<ReceiptType>("standard");
   const [status, setStatus] = useState<ReceiptStatus>("uploaded");
   const [memo, setMemo] = useState<string>("");
+
+  const baseAmount = useMemo(() => {
+    const n = Number(amountDigits || "0");
+    return Number.isFinite(n) ? n : 0;
+  }, [amountDigits]);
+  
+  const vatAmount = useMemo (() => {
+    if (taxType !=="tax") return 0;
+    // 공급가 기준 부가세 10% (원 단위 반올림)
+    return Math.round(baseAmount * 0.1);
+  }, [taxType, baseAmount])
+
+  const totalAmount = useMemo(() => {
+    if (taxType === "tax") return baseAmount + vatAmount;
+    // 면세/영세는 합계 = 공급가(입력값)
+    return baseAmount;
+  }, [taxType, baseAmount, vatAmount]);
+
+  const totalAmountDisplay = useMemo(
+    () => new Intl.NumberFormat("ko-KR").format(totalAmount),
+    [totalAmount]
+  );
+
+  const vatAmountDisplay = useMemo(
+    () => new Intl.NumberFormat("ko-KR").format(vatAmount),
+    [vatAmount]
+  );
 
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -311,7 +341,7 @@ export default function ReceiptsNewClient() {
 
         const { data, error } = await supabase
           .from("receipts")
-          .select("id, vendor_id, amount, payment_method, deposit_date, receipt_date, receipt_type, status, memo, image_path")
+          .select("id, vendor_id, amount, vat_amount, total_amount, tax_type, payment_method, deposit_date, receipt_date, receipt_type, status, memo, image_path")
           .eq("id", editId)
           .eq("user_id", userId)
           .maybeSingle();
@@ -327,7 +357,7 @@ export default function ReceiptsNewClient() {
         const v = vendors.find((x) => x.id === r.vendor_id) ?? null;
         setSelectedVendor(v);
         setSearchQuery(v?.name ?? "");
-
+        setTaxType((r as any).tax_type ?? "tax_free");
         setAmountDigits(String(r.amount ?? ""));
         setPaymentMethod((r.payment_method as PaymentMethod) ?? "cash");
         setDepositDate(r.deposit_date ?? "");
@@ -454,32 +484,27 @@ async function addFilesAsWebp(list: FileList | null) {
     setMsg("");
 
     if (loadingEdit) return;
-
     if (!selectedVendor) {
-      setMsg("상가를 선택해줘.");
+      setMsg("상가를 선택해 주세요.");
       return;
     }
     if (!purchaseDate) {
-      setMsg("구매일자를 선택해줘.");
+      setMsg("구매일자를 선택해 주세요.");
       return;
     }
-
     if (!hasAnyReceiptImage) {
-      setMsg("영수증 사진을 최소 1장 첨부해줘.");
+      setMsg("최소 1장의 영수증 사진을 첨부해 주세요.");
       return;
     }
-
-    const a = Number(amountDigits || "0");
+    const a = baseAmount;
     if (!Number.isFinite(a) || a <= 0) {
-      setMsg("금액을 올바르게 입력해줘.");
+      setMsg("금액을 올바르게 입력해 주세요.");
       return;
     }
-
     if (paymentMethod === "transfer" && !depositDate) {
-      setMsg("입금일을 선택해줘.");
+      setMsg("입금일을 선택해 주세요.");
       return;
     }
-
     setSaving(true);
 
     let uploadedNow: string[] = [];
@@ -521,10 +546,12 @@ async function addFilesAsWebp(list: FileList | null) {
     // C) afterPaths = (기존 유지) + (새로 업로드)
     const afterPaths = [...afterExistingPaths, ...newPaths];
 
-    // D) payload 대표 이미지(image_path) = 첫 장
     const payload = {
       vendor_id: selectedVendor.id,
-      amount: a,
+      tax_type: taxType,
+      amount: baseAmount,
+      vat_amount: vatAmount,
+      total_amount: totalAmount,
       payment_method: paymentMethod,
       deposit_date: paymentMethod === "transfer" ? depositDate : null,
       receipt_type: receiptType,
@@ -769,29 +796,7 @@ async function addFilesAsWebp(list: FileList | null) {
   return (
     <div style={{ margin: "0 auto", padding: 0 }}>
       {/* 상단 타이틀/뒤로 */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
-        <button
-          type="button"
-          onClick={() => {
-            // 수정모드면 상세로, 아니면 이전/벤더로
-            if (isEditMode && editId) {
-              router.push(`/receipts/${editId}`);
-              return;
-            }
-            router.back();
-          }}
-          style={{
-            padding: "8px 10px",
-            borderRadius: 12,
-            border: "1px solid #ddd",
-            fontWeight: 900,
-            fontSize: 13,
-            background: "white",
-          }}
-        >
-          ←
-        </button>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>{pageTitle}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 0 }}>
         {loadingEdit ? (
           <div style={{ marginLeft: "auto", fontSize: 12, opacity: 0.6, fontWeight: 800 }}>
             불러오는 중...
@@ -824,7 +829,7 @@ async function addFilesAsWebp(list: FileList | null) {
         }}
       />
 
-      <div style={{ marginTop: 9, display: "grid", gap: 14 }}>
+      <div style={{ marginTop: 0, display: "grid", gap: 14 }}>
         {/* ===== 상가명 ===== */}
         <div ref={vendorPickerWrapRef} style={{ position: "relative" }}>
           <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 6 }}>상가명</div>
@@ -856,11 +861,11 @@ async function addFilesAsWebp(list: FileList | null) {
               onFocus={() => setShowDropdown(true)}
               style={{
                 width: "100%",
-                padding: "10px 0",
+                padding: "6px 0",
                 border: "none",
                 outline: "none",
                 marginLeft: 10,
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: 600,
                 background: "transparent",
               }}
@@ -1129,6 +1134,41 @@ async function addFilesAsWebp(list: FileList | null) {
           </div>
         </div>
 
+        {/* 과세/면세 */}
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800 }}>과세구분</div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              disabled={loadingEdit}
+              onClick={() => setTaxType("tax_free")}
+              style={{ ...pillBase, background: taxType === "tax_free" ? "#f2f2f2" : "white" }}
+            >
+              면세
+            </button>
+
+            <button
+              type="button"
+              disabled={loadingEdit}
+              onClick={() => setTaxType("tax")}
+              style={{ ...pillBase, background: taxType === "tax" ? "#f2f2f2" : "white" }}
+            >
+              과세
+            </button>
+
+            {/* <button
+              type="button"
+              disabled={loadingEdit}
+              onClick={() => setTaxType("zero_rate")}
+              style={{ ...pillBase, background: taxType === "zero_rate" ? "#f2f2f2" : "white" }}
+              title="영세(0%)"
+            >
+              영세
+            </button> */}
+          </div>
+        </div>
+
         {/* 금액 */}
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>금액</div>
@@ -1139,16 +1179,16 @@ async function addFilesAsWebp(list: FileList | null) {
               onChange={(e) => setAmountDigits(onlyDigits(e.target.value).slice(0, 12))}
               placeholder="예: 45,000"
               inputMode="numeric"
-              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 15, fontWeight: 700 }}
+              style={{ textAlign: "right", width: "90%", padding: 11, borderRadius: 12, border: "1px solid #ddd", fontSize: 15, fontWeight: 700 }}
             />
             <div
               style={{
                 position: "absolute",
                 right: 12,
                 top: "50%",
-                transform: "translateY(-50%)",
+                transform: "translateY(-54%)",
                 fontSize: 14,
-                opacity: 0.7,
+                opacity: 0.8,
                 fontWeight: 800,
               }}
             >
@@ -1156,6 +1196,23 @@ async function addFilesAsWebp(list: FileList | null) {
             </div>
           </div>
         </div>
+
+        {/* 부가세, 합계금액 표시 */}
+        {taxType === "tax" && (
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 12 }}>
+          <div />
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>부가세(10%)</span>
+              <span style={{ textAlign: "right", minWidth: 120, marginRight: 28 }}>{vatAmountDisplay} 원</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700 }}>
+              <span>합계금액</span>
+              <span style={{ textAlign: "right", minWidth: 120, marginRight: 28  }}>{totalAmountDisplay} 원</span>
+            </div>
+          </div>
+        </div>
+      )}
 
         {/* 지급 구분 */}
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>

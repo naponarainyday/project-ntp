@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { ChevronDown, Search } from "lucide-react";
 
 type VendorRow = {
   vendor_id: string;

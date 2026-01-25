@@ -22,6 +22,8 @@ type Row = {
   id: string;
   vendor_id: string;
   amount: number;
+  vat_amount: number | null;
+  total_amount: number | null;
   status: ReceiptStatus;
   payment_method: PaymentMethod;
   deposit_date: string | null;
@@ -34,14 +36,20 @@ type Row = {
   receipt_images?: ReceiptImageLite[] | null
 };
 
-
-
 function formatMoney(n: number) {
   try {
     return Number(n).toLocaleString("ko-KR");
   } catch {
     return String(n);
   }
+}
+
+function vatOf(r: Row) {
+  return Number(r.vat_amount ?? 0);
+}
+
+function totalOf(r: Row) {
+  return Number(r.total_amount ?? 0);
 }
 
 function statusLabel(s: ReceiptStatus) {
@@ -214,7 +222,7 @@ export default function ReceiptsPage() {
           .from("receipts")
           .select(
             `
-              id, vendor_id, amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
+              id, vendor_id, amount, vat_amount, total_amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
               image_path, receipt_images(path, sort_order), vendors:vendors!receipts_vendor_id_fkey (
                 id, name, stall_no,
                 markets:markets!vendors_market_id_fkey (id, name, sort_order)
@@ -316,9 +324,15 @@ export default function ReceiptsPage() {
     });
   };
 
-  const filteredTotal = useMemo(() => {
-    return filtered.reduce((sum,r) => sum + Number(r.amount || 0), 0);
+  const filteredBaseTotal = useMemo(() => {
+    return filtered.reduce((sum, r) => sum + Number(r.amount || 0), 0);
   }, [filtered]);
+
+  const filteredVatTotal = useMemo(() => {
+    return filtered.reduce((sum, r) => sum + vatOf(r), 0);
+  }, [filtered]);
+
+  const hasVat = filteredVatTotal > 0;
 
   // 필터 버튼에 보여줄 텍스트들 (3줄용)
 
@@ -387,8 +401,12 @@ export default function ReceiptsPage() {
     return rows.filter((r) => set.has(r.id));
   }, [rows, selectedIds]);
 
-  const selectedTotal = useMemo(() => {
+  const selectedBaseTotal = useMemo(() => {
     return selectedRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  }, [selectedRows]);
+
+  const selectedVatTotal = useMemo(() => {
+    return selectedRows.reduce((sum, r) => sum + vatOf(r), 0);
   }, [selectedRows]);
 
   const uniformSelectedStatus = useMemo<ReceiptStatus | null>(() => {
@@ -814,15 +832,34 @@ export default function ReceiptsPage() {
           width: "100%",
           maxWidth: 448,
           bottom: 65,
+          height: 60,
           zIndex: 30,
           background: "#efefef",
           borderTop: "1px solid #242424",
-          padding: "10px 12px",
+          padding: "6px 12px 8px",
+          display: "flex",                // ✅ 추가
+          alignItems: "stretch",
         }}
       >
-        <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center" }}>
-          <div style={{ fontSize: 18, fontWeight: 900, marginLeft: "auto" }}>
-            합계&nbsp;&nbsp;{formatMoney(filteredTotal)} 원
+        <div style={{ maxWidth: 420, width: "100%", marginLeft: "auto" }}>
+          <div
+            style={{
+              height: "100%",              // ✅ 추가
+              display: "flex",             // ✅ 추가
+              flexDirection: "column",
+              alignItems: "flex-end",
+              justifyContent: hasVat ? "flex-end" : "center", // ✅ 핵심
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 900, lineHeight: "20px" }}>
+              합계 (VAT 미포함)&nbsp;&nbsp;{formatMoney(filteredBaseTotal)} 원
+            </div>
+
+            {hasVat ? (
+              <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.85, marginTop: 5, lineHeight: "16px" }}>
+                (부가세: {formatMoney(filteredVatTotal)} 원)
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -835,7 +872,8 @@ export default function ReceiptsPage() {
             transform: "translateX(-50%)",
             width: "100%",
             maxWidth: 448,
-            bottom: 66 + 47, // ✅ nav(64) + 합계바 높이(대충 52)
+            bottom: 125,
+            height: 42,
             zIndex: 31,
             background: "#fafafa",
             borderTop: "1px solid #E5E7EB",
@@ -844,7 +882,11 @@ export default function ReceiptsPage() {
         >
           <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center", gap: 10, marginTop: 4, marginBottom: 2 }}>
             <div style={{ fontSize: 14, fontWeight: 700 }}>
-              (선택 합계 {formatMoney(selectedTotal)} 원)
+              <div style={{ fontSize: 14, fontWeight: 700 }}>
+                선택 합계 {formatMoney(selectedBaseTotal)} 원
+                {selectedVatTotal > 0 ? ` (부가세 ${formatMoney(selectedVatTotal)} 원)` : ""}
+                
+              </div>
             </div>
 
             <button

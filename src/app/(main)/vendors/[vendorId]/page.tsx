@@ -22,6 +22,8 @@ type ReceiptRow = {
   id: string;
   vendor_id: string;
   amount: number;
+  vat_amount: number | null;
+  total_amount: number | null;
   status: ReceiptStatus;
   payment_method: PaymentMethod;
   deposit_date: string | null;
@@ -247,7 +249,7 @@ export default function VendorReceiptsPage() {
         const { data: r, error: rErr } = await supabase
           .from("receipts")
           .select(`
-            id, vendor_id, amount, status, payment_method, deposit_date, receipt_date, created_at, image_path, memo,
+            id, vendor_id, amount, vat_amount, total_amount, status, payment_method, deposit_date, receipt_date, created_at, image_path, memo,
             receipt_images(path, sort_order)
           `)
           .eq("vendor_id", vendorId)
@@ -328,6 +330,24 @@ export default function VendorReceiptsPage() {
     list.sort((a, b) => parseDateKey(b) - parseDateKey(a));
     return list;
   }, [rows, period, customFrom, customTo, statusFilter, paymentFilter]);
+
+  const filteredBaseTotal = useMemo(() => {
+    return filtered.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  }, [filtered]);
+
+  const filteredVatTotal = useMemo(() => {
+    return filtered.reduce((sum, r) => sum + Number(r.vat_amount || 0), 0);
+  }, [filtered]);
+
+  const selectedBaseTotal = useMemo(() => {
+    return selectedRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  }, [selectedRows]);
+
+  const selectedVatTotal = useMemo(() => {
+    return selectedRows.reduce((sum, r) => sum + Number(r.vat_amount || 0), 0);
+  }, [selectedRows]);
+
+  const hasVat = filteredVatTotal > 0;
 
   const allFilteredIds = useMemo(() => filtered.map((r) => r.id), [filtered]);
 
@@ -915,7 +935,7 @@ export default function VendorReceiptsPage() {
       )}
 
               {/* ✅ 선택 합계 + 상태 변경 안내 (합계바 위) */}
-              {selectedIds.size > 0 ? (
+              {selectedRows.length > 0 ? (
                 <div
                   style={{
                     position: "fixed",
@@ -923,18 +943,21 @@ export default function VendorReceiptsPage() {
                     transform: "translateX(-50%)",
                     width: "100%",
                     maxWidth: 448,
-                    bottom: 66 + 47, // 합계바 위
+                    bottom: 125,
+                    height: 42,
                     zIndex: 31,
                     background: "#fafafa",
-                    borderTop: "1px solid #bbbbbb",
-                    padding: "6px 12px",
+                    borderTop: "1px solid #E5E7EB",
+                    padding: "2px 12px",
                   }}
                 >
-                  <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ fontSize: 14, fontWeight: 800 }}>
-                    (선택 합계 {formatMoney(selectedTotal)}원)
+                  <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center", gap: 10, height: "100%" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, lineHeight: "16px" }}>
+                      선택 합계 {formatMoney(selectedBaseTotal)} 원
+                      {selectedVatTotal > 0 ? ` (부가세 ${formatMoney(selectedVatTotal)} 원)` : ""}
                     </div>
 
+                    {/* ✅ vendorId 페이지에 상태 변경 버튼이 원래 있으면 여기 오른쪽에 유지 */}
                     <button
                       type="button"
                       onClick={() => {
@@ -951,8 +974,8 @@ export default function VendorReceiptsPage() {
                         padding: "4px 10px",
                         fontSize: 13,
                         cursor: canOpenStatusDrawer ? "pointer" : "not-allowed",
+                        whiteSpace: "nowrap",
                       }}
-                      title={!canOpenStatusDrawer ? "같은 상태만 선택했을 때 변경 가능" : ""}
                     >
                       상태 변경
                     </button>
@@ -969,15 +992,34 @@ export default function VendorReceiptsPage() {
                   width: "100%",
                   maxWidth: 448,
                   bottom: 65,
+                  height: 60,
                   zIndex: 30,
                   background: "#efefef",
                   borderTop: "1px solid #242424",
-                  padding: "10px 12px",
+                  padding: "6px 12px 8px",
+                  display: "flex",
+                  alignItems: "stretch",
                 }}
               >
-                <div style={{ maxWidth: 420, margin: "0 auto", display: "flex", alignItems: "center" }}>
-                  <div style={{ fontSize: 18, fontWeight: 900, marginLeft: "auto" }}>
-                    합계&nbsp;&nbsp;{formatMoney(filteredTotal)}원
+                <div style={{ maxWidth: 420, width: "100%", marginLeft: "auto" }}>
+                  <div
+                    style={{
+                      height: "100%",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      justifyContent: hasVat ? "flex-end" : "center",
+                    }}
+                  >
+                    <div style={{ fontSize: 18, fontWeight: 900, lineHeight: "20px" }}>
+                      합계 (VAT 미포함)&nbsp;&nbsp;{formatMoney(filteredBaseTotal)} 원
+                    </div>
+
+                    {hasVat ? (
+                      <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.85, marginTop: 5, lineHeight: "16px" }}>
+                        (부가세: {formatMoney(filteredVatTotal)} 원)
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
