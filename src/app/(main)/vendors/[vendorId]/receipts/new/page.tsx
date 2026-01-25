@@ -10,7 +10,7 @@ import ReceiptLightbox from "@/components/ReceiptLightbox"
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type ReceiptType = "standard" | "simple";
-
+type TaxType = "tax_free" | "tax" | "zero_rate";
 type InvoiceCapability = "supported" | "not_supported" | null;
 
 function todayYYYYMMDD() {
@@ -136,6 +136,7 @@ export default function NewReceiptPage() {
   const [receiptType, setReceiptType] = useState<ReceiptType>("standard");
   const [status, setStatus] = useState<ReceiptStatus>("uploaded");
   const [memo, setMemo] = useState<string>("");
+  const [taxType, setTaxType] = useState<TaxType>("tax_free");
 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string>("");
@@ -147,6 +148,31 @@ export default function NewReceiptPage() {
   const amountDisplay = useMemo(
     () => formatNumberWithCommaFromDigits(amountDigits),
     [amountDigits]
+  );
+
+  const baseAmount = useMemo(() => {
+    const n = Number(amountDigits || "0");
+    return Number.isFinite(n) ? n : 0;
+  }, [amountDigits]);
+
+  const vatAmount = useMemo(() => {
+    if (taxType !== "tax") return 0;
+    return Math.round(baseAmount * 0.1);
+  }, [taxType, baseAmount]);
+
+  const totalAmount = useMemo(() => {
+    if (taxType === "tax") return baseAmount + vatAmount;
+    return baseAmount; // 면세/영세
+  }, [taxType, baseAmount, vatAmount]);
+
+  const vatAmountDisplay = useMemo(
+    () => new Intl.NumberFormat("ko-KR").format(vatAmount),
+    [vatAmount]
+  );
+
+  const totalAmountDisplay = useMemo(
+    () => new Intl.NumberFormat("ko-KR").format(totalAmount),
+    [totalAmount]
   );
 
   useEffect(() => {
@@ -249,7 +275,7 @@ export default function NewReceiptPage() {
     if (!purchaseDate) { setMsg("구매일자를 선택해 주세요."); return; }
     if (!hasAnyReceiptImage) { setMsg("영수증 사진을 최소 1장 첨부해 주세요."); return; }
 
-    const a = Number(amountDigits || "0");
+    const a = baseAmount;
     if (!Number.isFinite(a) || a <= 0) { setMsg("금액을 올바르게 입력해 주세요."); return; }
     if (paymentMethod === "transfer" && !depositDate) { setMsg("입금일을 선택해 주세요."); return; }
 
@@ -301,7 +327,10 @@ export default function NewReceiptPage() {
       const payload = {
         user_id: userId,
         vendor_id: vendorId,
-        amount: a,
+        tax_type: taxType,
+        amount: baseAmount,
+        vat_amount: vatAmount,
+        total_amount: totalAmount,
         payment_method: paymentMethod,
         deposit_date: paymentMethod === "transfer" ? depositDate : null,
         receipt_type: receiptType,
@@ -446,7 +475,7 @@ export default function NewReceiptPage() {
         }}
       />
 
-      <div style={{ marginTop: 6, display: "grid", gap: 14 }}>
+      <div style={{ marginTop: 0, display: "grid", gap: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>상가명</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
@@ -516,7 +545,7 @@ export default function NewReceiptPage() {
                   >
                     <img
                       src={src}
-                      alt={'new ${i + 1}'}
+                      alt={`new ${i + 1}`}
                       style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
                       onClick={() => {
                         setLbIndex(i);
@@ -551,6 +580,35 @@ export default function NewReceiptPage() {
           </div>
         </div>
 
+        {/* 과세/면세 */}
+        <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800 }}>과세구분</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => setTaxType("tax_free")}
+              style={{ ...pillBase, background: taxType === "tax_free" ? "#f2f2f2" : "white" }}
+            >
+              면세
+            </button>
+            <button
+              type="button"
+              onClick={() => setTaxType("tax")}
+              style={{ ...pillBase, background: taxType === "tax" ? "#f2f2f2" : "white" }}
+            >
+              과세
+            </button>
+            {/* <button
+              type="button"
+              onClick={() => setTaxType("zero_rate")}
+              title="영세(0%)"
+              style={{ ...pillBase, background: taxType === "zero_rate" ? "#f2f2f2" : "white" }}
+            >
+              영세
+            </button> */}
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>금액</div>
           <div style={{ position: "relative" }}>
@@ -559,13 +617,30 @@ export default function NewReceiptPage() {
               onChange={(e) => setAmountDigits(onlyDigits(e.target.value).slice(0, 12))}
               placeholder="예: 45,000"
               inputMode="numeric"
-              style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd", fontSize: 16, fontWeight: 700 }}
+              style={{ textAlign: "right", width: "90%", padding: 11, borderRadius: 12, border: "1px solid #ddd", fontSize: 15, fontWeight: 700 }}
             />
-            <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14, opacity: 0.7, fontWeight: 700 }}>
+            <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14, opacity: 0.8, fontWeight: 700 }}>
               원
             </div>
           </div>
         </div>
+
+        {taxType === "tax" && (
+          <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 12 }}>
+            <div />
+            <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span>부가세(10%)</span>
+                <span style={{ textAlign: "right", minWidth: 120, marginRight: 28 }}>{vatAmountDisplay} 원</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700 }}>
+                <span>합계금액</span>
+                <span style={{ textAlign: "right", minWidth: 120, marginRight: 28 }}>{totalAmountDisplay} 원</span>
+              </div>
+            </div>
+          </div>
+        )}
+
 
         <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 800 }}>지급 구분</div>
@@ -706,15 +781,15 @@ export default function NewReceiptPage() {
               <button type="button" onClick={closeSheet} style={{ width: "100%", padding: "16px 14px", background: "transparent", border: "none", fontSize: 16, fontWeight: 900 }}>취소</button>
             </div>
           </div>
-          {lbOpen && allPreviewItems.length > 0 && (
-            <ReceiptLightbox
-              urls={allPreviewItems.map((x) => x.src as string)}
-              startIndex={lbIndex}
-              onClose={() => setLbOpen(false)}
-              setIndex={(i: number) => setLbIndex(i)}
-            />
-          )}
         </div>
+      )}
+      {lbOpen && allPreviewItems.length > 0 && (
+        <ReceiptLightbox
+        urls={allPreviewItems.map((x) => x.src as string)}
+        startIndex={lbIndex}
+        onClose={() => setLbOpen(false)}
+        setIndex={(i: number) => setLbIndex(i)}
+        />
       )}
     </div>
   );
