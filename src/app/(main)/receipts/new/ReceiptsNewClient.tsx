@@ -727,7 +727,7 @@ async function addFilesAsWebp(list: FileList | null) {
           style={{
             ...pillBase,
             opacity: disabled ? 0.5 : 1,
-            border: selected ? (s as any).border : "1px solid #ddd",
+            border: selected ? (s as any).border : "3px solid #ddd",
             color: selected ? (s as any).color : "#111",
             background: selected ? (s as any).background : "white",
           }}
@@ -1286,7 +1286,7 @@ async function addFilesAsWebp(list: FileList | null) {
           <div style={{ fontSize: 14, fontWeight: 800, paddingTop: 10 }}>상태</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", opacity: loadingEdit ? 0.6 : 1 }}>
-              {StatusButton("uploaded", "요청대기", { border: "3px solid #0e0e0e", color: "#000000", background: "#ffffff" })}
+              {StatusButton("uploaded", "요청대기", { border: "3px solid #333333", color: "#000000", background: "#ffffff" })}
               {StatusButton("requested", "요청중", { border: "3px solid #8dafe6", color: "#000000", background: "#c1d2ee" })}
               {StatusButton("needs_fix", "수정필요", { border: "3px solid #efa6a3", color: "#000000", background: "#f3cfce" })}
               {StatusButton("completed", "완료", { border: "3px solid #9CA3AF", color: "#000000", background: "#eae9e9" })}
