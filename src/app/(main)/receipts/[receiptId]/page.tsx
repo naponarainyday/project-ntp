@@ -10,10 +10,14 @@ type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type ReceiptType = "standard" | "simple";
 type InvoiceCapability = "supported" | "not_supported" | null;
+type TaxType = "tax_free" | "tax" | "zero_rate";
 
 type ReceiptRow = {
   id: string;
   vendor_id: string;
+  tax_type: TaxType | null;
+  vat_amount: number | null;
+  total_amount: number | null;
   amount: number;
   payment_method: PaymentMethod;
   deposit_date: string | null;
@@ -64,6 +68,12 @@ function statusLabel(s: ReceiptStatus) {
   return "완료";
 }
 
+function taxTypeLabel(t: TaxType | null) {
+  if (t === "tax") return "과세";
+  if (t === "zero_rate") return "영세(0%)";
+  return "면세";
+}
+
 export default function ReceiptDetailPage() {
   const router = useRouter();
   const params = useParams<{ receiptId: string }>();
@@ -80,20 +90,53 @@ export default function ReceiptDetailPage() {
   const [receipt, setReceipt] = useState<ReceiptRow | null>(null);
   const [vendor, setVendor] = useState<VendorInfo | null>(null);
 
+  const taxType = (receipt?.tax_type ?? "tax_free") as TaxType;
+
+  // receipts/new와 동일한 의미:
+  // - amount: 공급가(입력값)
+  // - vat_amount: tax일 때만 10% (없으면 계산)
+  // - total_amount: tax일 때 공급가+VAT (없으면 계산)
+  const baseAmount = receipt?.amount ?? 0;
+
+  const vatAmount = useMemo(() => {
+    if (!receipt) return 0;
+    if (taxType !== "tax") return 0;
+
+    // DB에 vat_amount가 저장되어 있으면 그걸 우선 사용
+    if (typeof receipt.vat_amount === "number" && Number.isFinite(receipt.vat_amount)) {
+      return receipt.vat_amount;
+    }
+
+    // fallback: 10% 계산
+    return Math.round(baseAmount * 0.1);
+  }, [receipt, taxType, baseAmount]);
+
+  const totalAmount = useMemo(() => {
+    if (!receipt) return 0;
+
+    // DB total_amount 우선
+    if (typeof receipt.total_amount === "number" && Number.isFinite(receipt.total_amount)) {
+      return receipt.total_amount;
+    }
+
+    if (taxType === "tax") return baseAmount + vatAmount;
+    return baseAmount;
+  }, [receipt, taxType, baseAmount, vatAmount]);
+
   const [signedUrls, setSignedUrls] = useState<Array<{ sort_order: number; url: string }>>([]);
   const [lightboxOpen, setLightboxOpen] = useState<{ startIndex: number } | null>(null);
 
   const marketBadgeStyle: React.CSSProperties = {
     fontSize: 13,
     fontWeight: 800,
-    padding: "6px 10px",
+    padding: "2px 6px",
     borderRadius: 10,
     background: "#ffffff",
     color: "#3d3d3d",
   };
 
   const cardStyle: React.CSSProperties = {
-    border: "1px solid #ddd",
+    border: "1px solid #9f9f9f",
     borderRadius: 14,
     padding: 12,
     background: "white",
@@ -117,7 +160,7 @@ export default function ReceiptDetailPage() {
 
         const { data: r, error: rErr } = await supabase
           .from("receipts")
-          .select("id, vendor_id, amount, payment_method, deposit_date, receipt_date, receipt_type, status, memo, created_at")
+          .select("id, vendor_id, tax_type, amount, vat_amount, total_amount, payment_method, deposit_date, receipt_date, receipt_type, status, memo, created_at")
           .eq("id", receiptId)
           .eq("user_id", userId)
           .maybeSingle();
@@ -229,17 +272,15 @@ export default function ReceiptDetailPage() {
 
   return (
     <div style={{ margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
           type="button"
           onClick={onBack}
-          style={{ padding: "8px 10px", borderRadius: 12, border: "1px solid #ddd", fontWeight: 900, fontSize: 13, background: "white" }}
+          style={{ padding: "0px 4px", fontWeight: 900, fontSize: 13, background: "white" }}
         >
           ←
         </button>
-
         <div style={{ fontWeight: 900, fontSize: 15 }}>{headerTitle}</div>
-
         <button
           type="button"
           onClick={onEdit}
@@ -248,10 +289,10 @@ export default function ReceiptDetailPage() {
             marginLeft: "auto",
             padding: "8px 10px",
             borderRadius: 12,
-            border: "1px solid #ddd",
-            fontWeight: 900,
-            fontSize: 13,
+            border: "1px solid #0B1F5B",
             background: "white",
+            fontWeight: 700,
+            fontSize: 13,
             opacity: !receipt || loading ? 0.5 : 1,
           }}
         >
@@ -276,41 +317,19 @@ export default function ReceiptDetailPage() {
             </div>
           </div>
 
-          <div style={cardStyle}>
-            <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginLeft: 5 }}>영수증 사진</div>
-
-            {signedUrls.length === 0 ? (
-              <div style={{ fontSize: 13, opacity: 0.7 }}>사진이 없습니다.</div>
-            ) : (
-              <div style={{ display: "flex", gap: 8 }}>
-                {signedUrls.map((it, idx) => (
-                  <div key={it.sort_order} style={{ width: "33.3333%" }}>
-                    <div
-                      onClick={() => setLightboxOpen({ startIndex: idx })}
-                      style={{
-                        width: "100%",
-                        aspectRatio: "1 / 1",
-                        borderRadius: 14,
-                        border: "1px solid #ddd",
-                        overflow: "hidden",
-                        background: "#fff",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <img src={it.url} alt={`영수증 ${it.sort_order}`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>클릭시 상세 보기</div>
-          </div>
+          
 
           <div style={cardStyle}>
             <div style={{ display: "grid", gap: 15, marginLeft: 5 }}>
               <Row label="구매일" value={receipt.receipt_date ?? "-"} />
-              <Row label="금액" value={`${formatWon(receipt.amount)}원`} />
+              <Row label="과세구분" value={taxTypeLabel(receipt.tax_type)} />              
+              <Row label="금액" value={`${formatWon(baseAmount)}원`} />
+              {taxType === "tax" ? (
+                <>
+                  <Row label="부가세(10%)" value={`${formatWon(vatAmount)}원`} />
+                  <Row label="합계금액" value={`${formatWon(totalAmount)}원`} />
+                </>
+              ) : null}
               <Row label="지급" value={paymentLabel(receipt.payment_method)} />
               {receipt.payment_method === "transfer" ? <Row label="입금일" value={receipt.deposit_date ?? "-"} /> : null}
               <Row label="유형" value={receipt.receipt_type === "simple" ? "간이" : "일반"} />
@@ -321,6 +340,35 @@ export default function ReceiptDetailPage() {
               </div>
             </div>
           </div>
+
+          <div style={cardStyle}>
+              <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginLeft: 5 }}>영수증 사진</div>
+
+              {signedUrls.length === 0 ? (
+                <div style={{ fontSize: 13, opacity: 0.7 }}>사진이 없습니다.</div>
+              ) : (
+                <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+                  {signedUrls.map((it, idx) => (
+                    <div key={it.sort_order} style={{ width: "33.3333%" }}>
+                      <div
+                        onClick={() => setLightboxOpen({ startIndex: idx })}
+                        style={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          borderRadius: 14,
+                          border: "1px solid #ddd",
+                          overflow: "hidden",
+                          background: "#fff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <img src={it.url} alt={`영수증 ${it.sort_order}`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
         </div>
       ) : null}
 
