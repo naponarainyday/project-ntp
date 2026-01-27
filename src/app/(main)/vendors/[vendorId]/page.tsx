@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Copy } from "lucide-react";
 import ReceiptLightbox from "@/components/ReceiptLightbox"
+import ErrorPopup from "@/components/ErrorPopup";
+import { useHeaderAction } from "@/components/HeaderActionContext";
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer" | "payable";
@@ -22,6 +24,7 @@ type ReceiptRow = {
   id: string;
   vendor_id: string;
   amount: number;
+  tax_type: TaxType | null;
   vat_amount: number | null;
   total_amount: number | null;
   status: ReceiptStatus;
@@ -38,6 +41,14 @@ type ReceiptImageLite = {
   path: string;
   sort_order: number; // 1~3
 };
+
+type TaxType = "tax_free" | "tax" | "zero_rate";
+
+function taxTypeLabel(t: TaxType) {
+  if (t === "tax_free") return "면세";
+  if (t === "zero_rate") return "영세";
+  return "과세";
+}
 
 const STATUS_ORDER: ReceiptStatus[] = ["needs_fix", "uploaded", "requested", "completed"];
 
@@ -159,6 +170,7 @@ export default function VendorReceiptsPage() {
   const params = useParams<{ vendorId: string | string[] }>();
   const vendorId = Array.isArray(params.vendorId) ? params.vendorId[0] : params.vendorId;
   const router = useRouter();
+  const { setAction } = useHeaderAction();
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
@@ -173,6 +185,15 @@ export default function VendorReceiptsPage() {
   const [customTo, setCustomTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<Set<ReceiptStatus>>(new Set());
   const [paymentFilter, setPaymentFilter] = useState<Set<PaymentMethod>>(new Set());
+  const [taxTypeFilter, setTaxTypeFilter] = useState<Set<TaxType>>(new Set()); // ✅ 추가
+
+  // error popup
+  const [errorOpen, setErrorOpen] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const openError = (m: string) => {
+    setErrorMsg(m);
+    setErrorOpen(true);
+  };  
 
   const statusDescriptions: Record<ReceiptStatus, string> = {
     uploaded: "영수증 업로드 후 아직 계산서 발행 요청을 하지 않은 상태입니다.",
@@ -249,7 +270,7 @@ export default function VendorReceiptsPage() {
         const { data: r, error: rErr } = await supabase
           .from("receipts")
           .select(`
-            id, vendor_id, amount, vat_amount, total_amount, status, payment_method, deposit_date, receipt_date, created_at, image_path, memo,
+            id, vendor_id, tax_type, amount, vat_amount, total_amount, status, payment_method, deposit_date, receipt_date, created_at, image_path, memo,
             receipt_images(path, sort_order)
           `)
           .eq("vendor_id", vendorId)
@@ -278,17 +299,27 @@ export default function VendorReceiptsPage() {
 
   const periodText = useMemo(() => periodLabel(period), [period]);
 
+  const ALL_STATUS = 4;   // uploaded, requested, needs_fix, completed
+  const ALL_PAYMENT = 3;  // cash, transfer, payable
+  const ALL_TAX = 3;      // tax_free, tax, zero_rate
+
   const statusText = useMemo(() => {
-    return statusFilter.size === 0
+    return statusFilter.size === 0 || statusFilter.size === ALL_STATUS
       ? "전체"
       : Array.from(statusFilter).map((x) => statusLabel(x)).join(", ");
   }, [statusFilter]);
 
   const paymentText = useMemo(() => {
-    return paymentFilter.size === 0
+    return paymentFilter.size === 0 || paymentFilter.size === ALL_PAYMENT
       ? "전체"
       : Array.from(paymentFilter).map((x) => paymentLabel(x)).join(", ");
   }, [paymentFilter]);
+
+  const taxTypeText = useMemo(() => {
+    return taxTypeFilter.size === 0 || taxTypeFilter.size === ALL_TAX
+      ? "전체"
+      : Array.from(taxTypeFilter).map((x) => taxTypeLabel(x)).join(", ");
+  }, [taxTypeFilter]);
 
 
   const toggleStatusFilter = (s: ReceiptStatus) => {
@@ -309,6 +340,74 @@ export default function VendorReceiptsPage() {
     });
   };
 
+  const toggleTaxTypeFilter = (tt: TaxType) => {
+    setTaxTypeFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(tt)) next.delete(tt);
+      else next.add(tt);
+      return next;
+    });
+  };
+
+  const uniformSelectedTaxType = useMemo<TaxType | null>(() => {
+    if (selectedRows.length === 0) return null;
+    const t0 = selectedRows[0].tax_type ?? null;
+    if (!t0) return null;
+    for (const r of selectedRows) if (r.tax_type !== t0) return null;
+    return t0;
+  }, [selectedRows]);
+
+  const onClickCopy = useCallback(() => {
+      if (selectedRows.length === 0) {
+        openError("내보낼 영수증을 선택해 주세요.");
+        return;
+      }
+
+      if (!uniformSelectedStatus || !uniformSelectedTaxType) {
+        openError(
+          "같은 과세구분, 영수증 상태 끼리만 내보내기 가능합니다."
+        );
+        return;
+      }
+
+      sessionStorage.setItem(
+        "vendor_export_payload",
+        JSON.stringify({
+          vendorId,
+          receiptIds: Array.from(selectedIds),
+          status: uniformSelectedStatus,
+          taxType: uniformSelectedTaxType,
+        })
+      );
+
+      router.push(`/vendors/${vendorId}/export`);
+    }, [selectedRows.length, uniformSelectedStatus, uniformSelectedTaxType, vendorId, selectedIds, router]);
+
+    useEffect(() => {
+      setAction(
+        <button
+          type="button"
+          onClick={onClickCopy}
+          className="
+            h-8 w-8 rounded-lg
+            text-slate-300
+            hover:bg-slate-800 hover:text-white
+            transition
+            flex items-center justify-center
+          "
+          aria-label="복사"
+          title="복사"
+        >
+          <Copy size={18} />
+        </button>
+      );
+
+      return () => {
+        // ✅ 페이지 벗어나면 헤더 버튼 제거
+        setAction(null);
+      };
+    }, [setAction, onClickCopy]);
+  
   const filtered = useMemo(() => {
     let list = rows.slice();
 
@@ -326,10 +425,17 @@ export default function VendorReceiptsPage() {
 
     if (statusFilter.size > 0) list = list.filter((r) => statusFilter.has(r.status));
     if (paymentFilter.size > 0) list = list.filter((r) => paymentFilter.has(r.payment_method));
+    if (taxTypeFilter.size > 0) {
+      list = list.filter((r) => {
+        // r.tax_type 이 null 인 데이터는 필터 대상에서 제외
+        if (!r.tax_type) return false;
+        return taxTypeFilter.has(r.tax_type);
+      });
+    }
 
     list.sort((a, b) => parseDateKey(b) - parseDateKey(a));
     return list;
-  }, [rows, period, customFrom, customTo, statusFilter, paymentFilter]);
+  }, [rows, period, customFrom, customTo, statusFilter, paymentFilter, taxTypeFilter]);
 
   const filteredBaseTotal = useMemo(() => {
     return filtered.reduce((sum, r) => sum + Number(r.amount || 0), 0);
@@ -625,10 +731,13 @@ export default function VendorReceiptsPage() {
               기간: <span style={{ opacity: 0.8, fontWeight: 700 }}>{periodText}</span>
             </div>
             <div style={{ fontSize: 12}}>
-              상태: <span style={{ opacity: 0.8, fontWeight: 700 }}>{statusText}</span>
+              영수증 상태: <span style={{ opacity: 0.8, fontWeight: 700 }}>{statusText}</span>
             </div>
             <div style={{ fontSize: 12}}>
-              지급: <span style={{ opacity: 0.8, fontWeight: 700 }}>{paymentText}</span>
+              지급방식: <span style={{ opacity: 0.8, fontWeight: 700 }}>{paymentText}</span>
+            </div>
+            <div style={{ fontSize: 12 }}>
+              과세구분: <span style={{ opacity: 0.8, fontWeight: 700 }}>{taxTypeText}</span>
             </div>
           </div>
 
@@ -1292,7 +1401,37 @@ export default function VendorReceiptsPage() {
                   );
                 })}
               </div>
+            {/* tax type filter */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9, marginBottom: 8 }}>
+                과세구분 <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.65 }}>(미선택=전체)</span>
+              </div>
 
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                {(["tax_free", "tax", "zero_rate"] as TaxType[]).map((tt) => {
+                  const active = taxTypeFilter.has(tt);
+                  return (
+                    <button
+                      key={tt}
+                      onClick={() => toggleTaxTypeFilter(tt)}
+                      style={{
+                        padding: "10px 10px",
+                        borderRadius: 10,
+                        border: `2px solid ${active ? "#111827" : "#E5E7EB"}`,
+                        background: "#FFFFFF",
+                        color: "#111827",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontWeight: active ? 900 : undefined,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {taxTypeLabel(tt)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
               <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
                 <button
                   onClick={() => {
@@ -1301,6 +1440,7 @@ export default function VendorReceiptsPage() {
                     setCustomTo("");
                     setStatusFilter(new Set());
                     setPaymentFilter(new Set());
+                    setTaxTypeFilter(new Set());
                   }}
                   style={{
                     flex: 1,
@@ -1325,6 +1465,11 @@ export default function VendorReceiptsPage() {
         urls={lightboxOpen?.urls ?? []}
         startIndex={lightboxOpen?.startIndex ?? -1}
         onClose={() => setLightboxOpen(null)}
+      />
+      <ErrorPopup
+        open={errorOpen}
+        message={errorMsg}
+        onClose={() => setErrorOpen(false)}
       />
     </div>
   );
