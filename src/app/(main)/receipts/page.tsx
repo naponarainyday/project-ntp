@@ -9,6 +9,7 @@ import ReceiptLightbox from "@/components/ReceiptLightbox";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptType = "standard" | "simple" | null;
+type TaxType = "tax_free" | "tax" | "zero_rate";
 
 type Market = { id: string; name: string | null; sort_order: number | null };
 type Vendor = { id: string; name: string; stall_no: string | null; markets?: Market[] | Market | null };
@@ -21,6 +22,7 @@ type ReceiptImageLite = {
 type Row = {
   id: string;
   vendor_id: string;
+  tax_type: TaxType | null;
   amount: number;
   vat_amount: number | null;
   total_amount: number | null;
@@ -42,6 +44,12 @@ function formatMoney(n: number) {
   } catch {
     return String(n);
   }
+}
+
+function taxTypeLabel(t: TaxType) {
+  if (t === "tax_free") return "면세";
+  if (t === "zero_rate") return "영세";
+  return "과세";
 }
 
 function vatOf(r: Row) {
@@ -179,6 +187,9 @@ export default function ReceiptsPage() {
   // payment method filter (empty=> all)
   const [paymentFilter, setPaymentFilter] = useState<Set<PaymentMethod>>(new Set());
 
+  // taxtype filter
+  const [taxTypeFilter, setTaxTypeFilter] = useState<Set<TaxType>>(new Set());
+
   const statusDescriptions: Record<ReceiptStatus, string> = {
     uploaded: "영수증 업로드 후 아직 계산서 발행 요청을 하지 않은 상태입니다.",
     requested: "계산서 발행을 요청한 상태입니다.",
@@ -222,7 +233,7 @@ export default function ReceiptsPage() {
           .from("receipts")
           .select(
             `
-              id, vendor_id, amount, vat_amount, total_amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
+              id, vendor_id, tax_type, amount, vat_amount, total_amount, status, payment_method, deposit_date, receipt_type, created_at, receipt_date, memo,
               image_path, receipt_images(path, sort_order), vendors:vendors!receipts_vendor_id_fkey (
                 id, name, stall_no,
                 markets:markets!vendors_market_id_fkey (id, name, sort_order)
@@ -275,6 +286,13 @@ export default function ReceiptsPage() {
 
     if (paymentFilter.size > 0) {
       list = list.filter((r) => paymentFilter.has(r.payment_method));
+    }
+
+    if (taxTypeFilter.size > 0) {
+      list = list.filter((r) => {
+        if (!r.tax_type) return false;        // tax_type null은 제외(= vendorId와 동일)
+        return taxTypeFilter.has(r.tax_type);
+      });
     }
 
     const q = vendorQuery.trim().toLowerCase();
@@ -340,18 +358,27 @@ export default function ReceiptsPage() {
     return periodLabel(period);
   }, [period]);
 
-  const statusText = useMemo(() => {
-    return statusFilter.size === 0
-      ? "전체"
-      : Array.from(statusFilter).map((x) => statusLabel(x)).join(", ");
-  }, [statusFilter]);
-
-  const paymentText = useMemo(() => {
-    return paymentFilter.size === 0
-      ? "전체"
-      : Array.from(paymentFilter).map((x) => paymentLabel(x)).join(", ");
-  }, [paymentFilter]);
-
+    const ALL_STATUS = 4;   // uploaded, requested, needs_fix, completed
+    const ALL_PAYMENT = 3;  // cash, transfer, payable
+    const ALL_TAX = 3;      // tax_free, tax, zero_rate
+  
+    const statusText = useMemo(() => {
+      return statusFilter.size === 0 || statusFilter.size === ALL_STATUS
+        ? "전체"
+        : Array.from(statusFilter).map((x) => statusLabel(x)).join(", ");
+    }, [statusFilter]);
+  
+    const paymentText = useMemo(() => {
+      return paymentFilter.size === 0 || paymentFilter.size === ALL_PAYMENT
+        ? "전체"
+        : Array.from(paymentFilter).map((x) => paymentLabel(x)).join(", ");
+    }, [paymentFilter]);
+  
+    const taxTypeText = useMemo(() => {
+      return taxTypeFilter.size === 0 || taxTypeFilter.size === ALL_TAX
+        ? "전체"
+        : Array.from(taxTypeFilter).map((x) => taxTypeLabel(x)).join(", ");
+    }, [taxTypeFilter]);
   
   const toggleStatusFilter = (s: ReceiptStatus) => {
     setStatusFilter((prev) => {
@@ -374,6 +401,15 @@ export default function ReceiptsPage() {
     });
   };
   
+  const toggleTaxTypeFilter = (tt: TaxType) => {
+  setTaxTypeFilter((prev) => {
+    const next = new Set(prev);
+    if (next.has(tt)) next.delete(tt);
+    else next.add(tt);
+    return next;
+  });
+};
+
   const clearSelection = () => {
     setSelectedIds(new Set());
     setPendingStatus(null);
@@ -600,10 +636,13 @@ export default function ReceiptsPage() {
               기간: <span style={{ opacity: 0.8, fontWeight: 700 }}>{periodText}</span>
             </div>
             <div style={{ fontSize: 12}}>
-              상태: <span style={{ opacity: 0.8, fontWeight: 700 }}>{statusText}</span>
+              영수증 상태: <span style={{ opacity: 0.8, fontWeight: 700 }}>{statusText}</span>
             </div>
             <div style={{ fontSize: 12}}>
-              지급: <span style={{ opacity: 0.8, fontWeight: 700 }}>{paymentText}</span>
+              지급방식: <span style={{ opacity: 0.8, fontWeight: 700 }}>{paymentText}</span>
+            </div>
+            <div style={{ fontSize: 12 }}>
+              과세구분: <span style={{ opacity: 0.8, fontWeight: 700 }}>{taxTypeText}</span>
             </div>
           </div>
 
@@ -1087,6 +1126,38 @@ export default function ReceiptsPage() {
               </div>
             </div>
 
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9, marginBottom: 8 }}>
+                과세구분 <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.65 }}>(미선택=전체)</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                {(["tax_free", "tax", "zero_rate"] as TaxType[]).map((tt) => {
+                  const active = taxTypeFilter.has(tt);
+
+                  return (
+                    <button
+                      key={tt}
+                      onClick={() => toggleTaxTypeFilter(tt)}
+                      style={{
+                        padding: "10px 10px",
+                        borderRadius: 10,
+                        border: `2px solid ${active ? "#111827" : "#E5E7EB"}`,
+                        background: "#FFFFFF",
+                        color: "#111827",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontWeight: active ? 900 : undefined,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {taxTypeLabel(tt)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
               <div style={{ marginTop: 4, paddingTop: 12}}>  
                 <button
                   onClick={() => {
@@ -1095,6 +1166,7 @@ export default function ReceiptsPage() {
                     setCustomTo("");
                     setStatusFilter(new Set());
                     setPaymentFilter(new Set());
+                    setTaxTypeFilter(new Set());
                   }}
                   style={{
                     width: "100%",

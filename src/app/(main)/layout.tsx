@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Menu, FileText, Store, User, LogOut } from "lucide-react";
+import { HeaderActionContext } from "@/components/HeaderActionContext";
 
 function cn(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -14,8 +15,10 @@ function cn(...classes: Array<string | false | undefined>) {
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  
+  const [headerActions, setHeaderActions] = useState<React.ReactNode>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-
+  
   const isHome = pathname === "/";
   const isSettings = pathname?.startsWith("/settings");
   const isVendors = pathname?.startsWith("/vendors");
@@ -74,9 +77,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* 컨테이너 */}
-      <div className="mx-auto flex min-h-screen max-w-md flex-col bg-white shadow-sm relative">
+    <HeaderActionContext.Provider value={{ setAction: setHeaderActions }}>
+      <div className="min-h-screen bg-gray-50">
+        {/* 컨테이너 */}
+        <div className="mx-auto flex min-h-screen max-w-md flex-col bg-white shadow-sm relative">
         {/* 1) 헤더 */}
         <header className="sticky top-0 z-10 bg-slate-700">
           <div className="flex h-12 items-center justify-between px-6">
@@ -87,25 +91,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
 
             {/* 오른쪽: 액션 아이콘 자리(최대 2~3개) */}
             <div className="flex items-center gap-2 text-slate-200">
-              {/* TODO: 페이지별로 필요한 액션 버튼을 여기에 렌더링 */}
-              {/* 예시(지금은 자리만): */}
-              {/* <button
-                type="button"
-                className="h-8 w-8 rounded-lg text-slate-200 hover:bg-slate-800 hover:text-white transition"
-                aria-label="액션1"
-                disabled
-              >
-                ⤴️
-              </button>
-              <button
-                type="button"
-                className="h-8 w-8 rounded-lg text-slate-200 hover:bg-slate-800 hover:text-white transition"
-                aria-label="액션2"
-                disabled
-              >
-                📋
-              </button> */}
-              {/* 필요하면 3번째도 같은 패턴으로 추가 */}
+              {headerActions}
             </div>
           </div>
         </header>
@@ -253,5 +239,6 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         </nav>
       </div>
     </div>
+    </HeaderActionContext.Provider>
   );
 }
