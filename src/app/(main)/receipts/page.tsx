@@ -723,6 +723,7 @@ export default function ReceiptsPage() {
                       {/* ✅ (2) payment method: amount 앞, 옅은 회색 */}
                       <div style={{ fontSize: 12, opacity: 0.8 }}>
                         {paymentLabel(r.payment_method)}
+                        {/* {r.tax_type ? `/${taxTypeLabel(r.tax_type)}` : ""} */}
                       </div>
 
                       <div style={{ fontSize: 15, fontWeight: 700 }}>{formatMoney(Number(r.amount || 0))} 원</div>

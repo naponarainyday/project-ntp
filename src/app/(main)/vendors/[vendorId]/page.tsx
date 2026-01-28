@@ -890,8 +890,9 @@ export default function VendorReceiptsPage() {
                                 ) : (
                                   <div style={{ flex: 1}} />
                                 )}  
-                                <div style={{ fontSize: 12, opacity: 0.8 }}>
+                                <div style={{ fontSize: 12, opacity: 0.8, marginRight: 4 }}>
                                   {paymentLabel(r.payment_method)}
+                                  {r.tax_type ? `/${taxTypeLabel(r.tax_type)}` : ""}
                                 </div>
                               </div>
                             </div>
