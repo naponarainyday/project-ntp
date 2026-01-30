@@ -38,6 +38,13 @@ type Row = {
   receipt_images?: ReceiptImageLite[] | null
 };
 
+type LightboxOpen = {
+  urls: string[];
+  startIndex: number;
+  vendorName: string | null;
+  receiptDate: string | null; // "YYYY-MM-DD" 원본 그대로
+};
+
 function formatMoney(n: number) {
   try {
     return Number(n).toLocaleString("ko-KR");
@@ -212,6 +219,10 @@ export default function ReceiptsPage() {
   const [lightboxOpen, setLightboxOpen] = useState<{
     urls: string[];
     startIndex: number;
+    meta?: {
+      vendorName?: string | null;
+      receiptDate?: string | null;
+    };
   } | null>(null);
 
   useEffect(() => {
@@ -795,7 +806,14 @@ export default function ReceiptsPage() {
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setLightboxOpen({ urls, startIndex: idx }); // ✅ 이제 idx가 바로 startIndex
+                                  setLightboxOpen({
+                                    urls,
+                                    startIndex: idx,
+                                    meta: {
+                                      vendorName: vendorName,
+                                      receiptDate: r.receipt_date ?? null,
+                                    }
+                                  });
                                 }}
                                 style={{
                                   border: "1px solid #eee",
@@ -1308,12 +1326,14 @@ export default function ReceiptsPage() {
                 </div>
               </>
             ) : null}
-
+      {lightboxOpen ? (
       <ReceiptLightbox
         urls={lightboxOpen?.urls ?? []}
         startIndex={lightboxOpen?.startIndex ?? -1}
+        meta={lightboxOpen?.meta}
         onClose={() => setLightboxOpen(null)}
       />
+      ) : null}
     </div>
   );
 }

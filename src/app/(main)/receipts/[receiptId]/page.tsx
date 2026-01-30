@@ -124,7 +124,14 @@ export default function ReceiptDetailPage() {
   }, [receipt, taxType, baseAmount, vatAmount]);
 
   const [signedUrls, setSignedUrls] = useState<Array<{ sort_order: number; url: string }>>([]);
-  const [lightboxOpen, setLightboxOpen] = useState<{ startIndex: number } | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState<{
+    urls: string[];
+    startIndex: number;
+    meta?: {
+      vendorName?: string | null;
+      receiptDate?: string | null;
+    };
+  } | null>(null);
 
   const marketBadgeStyle: React.CSSProperties = {
     fontSize: 13,
@@ -351,7 +358,16 @@ export default function ReceiptDetailPage() {
                   {signedUrls.map((it, idx) => (
                     <div key={it.sort_order} style={{ width: "33.3333%" }}>
                       <div
-                        onClick={() => setLightboxOpen({ startIndex: idx })}
+                        onClick={() =>
+                          setLightboxOpen({
+                            urls: signedUrls.map((x) => x.url), // ✅ 필수
+                            startIndex: idx,
+                            meta: {
+                              vendorName: vendor?.name ?? null,
+                              receiptDate: receipt.receipt_date ?? receipt.deposit_date ?? receipt.created_at,
+                            },
+                          })
+                        }
                         style={{
                           width: "100%",
                           aspectRatio: "1 / 1",
@@ -374,8 +390,9 @@ export default function ReceiptDetailPage() {
 
       {/* ✅ Lightbox는 return 내부 맨 아래 */}
       <ReceiptLightbox
-        urls={signedUrls.map((x) => x.url)}
+        urls={lightboxOpen?.urls ?? []}
         startIndex={lightboxOpen?.startIndex ?? -1}
+        meta={lightboxOpen?.meta}
         onClose={() => setLightboxOpen(null)}
       />
     </div>
