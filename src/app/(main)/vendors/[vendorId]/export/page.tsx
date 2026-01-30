@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Copy, ArrowLeft } from "lucide-react";
+import { Copy, ArrowLeft, Download } from "lucide-react";
+import ReceiptLightbox from "@/components/ReceiptLightbox";
 
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type PaymentMethod = "cash" | "transfer" | "payable";
@@ -23,6 +24,12 @@ type ReceiptRow = {
   created_at: string;
   memo?: string | null;
 };
+
+type ReceiptImageSigned = {
+  receipt_id: string;
+  sort_order: number;
+  url: string;
+}
 
 type ExportPayload = {
   vendorId: string;
@@ -50,6 +57,34 @@ function formatMoney(n: number) {
   } catch {
     return String(n);
   }
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function fmtYYMMDD(d: Date) {
+  const yy = String(d.getFullYear()).slice(2);
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  return `${yy}${mm}${dd}`;
+}
+
+function sanitizeFilename(s: string) {
+  return (s || "")
+    .trim()
+    .replace(/[\/\\?%*:|"<>]/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+}
+
+function extFromPathOrUrl(s: string) {
+  const clean = s.split("?")[0] ?? s;
+  const m = clean.match(/\.([a-zA-Z0-9]+)$/);
+  const ext = (m?.[1] ?? "").toLowerCase();
+  if (!ext) return "jpg";
+  if (ext === "jpeg") return "jpg";
+  return ext;
 }
 
 function toDateObj(s?: string | null) {
@@ -94,6 +129,45 @@ export default function VendorExportPage() {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [profile, setProfile] = useState<ProfileLite | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [vendorName, setVendorName] = useState<string>("");
+
+  // ✅ 선택된 영수증들의 전체 이미지(서명 URL)
+  const [signedImages, setSignedImages] = useState<ReceiptImageSigned[]>([]);
+  const [downloadingZip, setDownloadingZip] = useState(false);
+
+  // ✅ export lightbox
+  const [LightboxOpen, setLightboxOpen] = useState(false);
+  const [LightboxIndex, setLightboxIndex] = useState(0);
+
+  const sortedImages = useMemo(() => {
+    return (signedImages ?? [])
+      .slice()
+      .sort((a, b) =>
+        a.receipt_id === b.receipt_id
+          ? a.sort_order - b.sort_order
+          : a.receipt_id.localeCompare(b.receipt_id)
+      );
+  }, [signedImages]);
+
+  // ✅ receipt_id -> receipt_date 매핑 (라이트박스 파일명/메타용)
+  const receiptDateMap = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const r of rows) {
+      // 여기서는 "구매일"을 우선으로 파일명에 쓰는 게 자연스러움
+      m.set(r.id, r.receipt_date ?? null);
+    }
+    return m;
+  }, [rows]);
+
+  // ✅ 현재 라이트박스에서 보고 있는 이미지의 메타
+  const lbMeta = useMemo(() => {
+    const cur = sortedImages[LightboxIndex];
+    if (!cur) return { vendorName, receiptDate: null as string | null };
+    return {
+      vendorName,
+      receiptDate: receiptDateMap.get(cur.receipt_id) ?? null,
+    };
+  }, [sortedImages, LightboxIndex, vendorName, receiptDateMap]);
 
   const [bizNameOn, setBizNameOn] = useState(true);
   const [bizNoOn, setBizNoOn] = useState(true);
@@ -107,12 +181,14 @@ export default function VendorExportPage() {
   }
 
 
+
   // ✅ 체크 옵션들
   const [optBiz, setOptBiz] = useState(true);
   const [optDate, setOptDate] = useState(true);
   const [optAmount, setOptAmount] = useState(true);
   const [optPay, setOptPay] = useState(true);
   const [optReceiverEmail, setOptReceiverEmail] = useState(true);
+  const [optAttachImages, setOptAttachImages] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -120,23 +196,20 @@ export default function VendorExportPage() {
       setMsg("");
 
       try {
-        // 1) payload 로드
         const raw = sessionStorage.getItem("vendor_export_payload");
         if (!raw) {
           setMsg("내보내기 정보가 없습니다. 상가 페이지에서 영수증을 선택한 뒤 내보내기를 눌러주세요.");
-          setLoading(false);
           return;
         }
 
         const parsed = JSON.parse(raw) as ExportPayload;
         if (!parsed?.receiptIds?.length || parsed.vendorId !== vendorId) {
           setMsg("내보내기 정보가 유효하지 않습니다. 다시 선택해 주세요.");
-          setLoading(false);
           return;
         }
         setPayload(parsed);
 
-        // 2) 로그인
+        // 로그인
         const { data: authData, error: authErr } = await supabase.auth.getUser();
         if (authErr) throw authErr;
 
@@ -147,22 +220,17 @@ export default function VendorExportPage() {
         }
         setUserEmail(user.email ?? null);
 
-        // 3) profile 로드 (컬럼명은 너희 테이블에 맞게 조정)
-        //    - 일단 가능한 컬럼들을 select 해보고, 없으면 null로 처리되게 작성
+        // profile
         const { data: p, error: pErr } = await supabase
           .from("profiles")
           .select("company_name, tax_id, rep_name, email")
           .eq("id", user.id)
           .maybeSingle();
 
-        if (pErr) {
-          // profile 컬럼명이 다를 수 있으니, 에러여도 페이지는 살려둠
-          console.log("profile load error:", pErr);
-        } else {
-          setProfile((p ?? null) as any);
-        }
+        if (!pErr) setProfile((p ?? null) as any);
+        else console.log("profile load error:", pErr);
 
-        // 4) receipts 로드 (선택된 id만)
+        // receipts
         const { data: r, error: rErr } = await supabase
           .from("receipts")
           .select("id, vendor_id, amount, tax_type, vat_amount, total_amount, status, payment_method, deposit_date, receipt_date, created_at, memo")
@@ -172,13 +240,58 @@ export default function VendorExportPage() {
         if (rErr) throw rErr;
 
         const list = ((r ?? []) as ReceiptRow[]).slice();
-        // 날짜 기준 정렬(오름차순이 읽기 편함)
         list.sort((a, b) => {
           const ta = Date.parse(pickRowDate(a));
           const tb = Date.parse(pickRowDate(b));
           return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
         });
         setRows(list);
+
+        // vendor 이름
+        const { data: v, error: vErr } = await supabase
+          .from("vendors")
+          .select("name")
+          .eq("id", vendorId)
+          .maybeSingle();
+
+        if (!vErr) setVendorName((v as any)?.name ?? "");
+
+        // receipt_images → signed urls
+        const { data: imgs, error: imgErr } = await supabase
+          .from("receipt_images")
+          .select("receipt_id, path, sort_order")
+          .eq("user_id", user.id)
+          .in("receipt_id", parsed.receiptIds)
+          .order("receipt_id", { ascending: true })
+          .order("sort_order", { ascending: true });
+
+        if (imgErr) {
+          console.log("receipt_images load error:", imgErr);
+          setSignedImages([]);
+        } else {
+          const normalized = (imgs ?? [])
+            .map((x: any) => ({
+              receipt_id: String(x.receipt_id),
+              path: String(x.path),
+              sort_order: Number(x.sort_order),
+            }))
+            .filter((x) => x.receipt_id && x.path && Number.isFinite(x.sort_order))
+            .sort((a, b) =>
+              a.receipt_id === b.receipt_id ? a.sort_order - b.sort_order : a.receipt_id.localeCompare(b.receipt_id)
+            );
+
+          const signedResults = await Promise.all(
+            normalized.map(async (it) => {
+              const { data: s, error: sErr } = await supabase.storage.from("receipts").createSignedUrl(it.path, 60 * 60);
+              if (sErr) return null;
+              const url = s?.signedUrl ?? null;
+              if (!url) return null;
+              return { receipt_id: it.receipt_id, sort_order: it.sort_order, url };
+            })
+          );
+
+          setSignedImages((signedResults.filter(Boolean) as ReceiptImageSigned[]) ?? []);
+        }
       } catch (e: any) {
         console.log("EXPORT LOAD ERROR:", e);
         setMsg(e?.message ?? "불러오기 실패");
@@ -287,8 +400,13 @@ export default function VendorExportPage() {
       blocks.push(`수신 이메일: ${receiverEmailText}`);
     }
 
+    if (optAttachImages) {
+      blocks.push("");
+      blocks.push("첨부파일: 영수증 사진 전체");
+    }
+
     return blocks.join("\n");
-  }, [titleLine, optBiz, bizBlock, listLines, sumBase, hasVat, sumVat, optReceiverEmail, receiverEmailText]);
+  }, [titleLine, optBiz, bizBlock, listLines, sumBase, hasVat, sumVat, optReceiverEmail, receiverEmailText, optAttachImages]);
 
   const copyToClipboard = async () => {
     try {
@@ -298,6 +416,82 @@ export default function VendorExportPage() {
     } catch (e) {
       console.log("clipboard error:", e);
       setMsg("복사에 실패했습니다. (브라우저 권한/HTTPS 확인)");
+    }
+  };
+
+  const downloadZipAll = async () => {
+    if (downloadingZip) return;
+    if (rows.length === 0) return;
+    if (!signedImages || signedImages.length === 0) {
+      setMsg("다운로드할 사진이 없습니다.");
+      return;
+    }
+
+    setDownloadingZip(true);
+    setMsg("");
+
+    try {
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+
+      // receipt_id → receiptDate(yymmdd) 매핑
+      const receiptDateMap = new Map<string, string>();
+      for (const r of rows) {
+        const d = toDateObj(r.receipt_date ?? null);
+        if (d) receiptDateMap.set(r.id, fmtYYMMDD(d));
+        else receiptDateMap.set(r.id, "yymmdd");
+      }
+
+      const vName = sanitizeFilename(vendorName || "vendor");
+      const grouped = new Map<string, ReceiptImageSigned[]>();
+
+      for (const im of signedImages) {
+        const arr = grouped.get(im.receipt_id) ?? [];
+        arr.push(im);
+        grouped.set(im.receipt_id, arr);
+      }
+
+      // receipt 단위로 index 1..n
+      for (const [rid, arr] of grouped.entries()) {
+        arr.sort((a, b) => a.sort_order - b.sort_order);
+        const date = receiptDateMap.get(rid) ?? "yymmdd";
+
+        for (let i = 0; i < arr.length; i++) {
+          const url = arr[i].url;
+          const resp = await fetch(url);
+          if (!resp.ok) throw new Error(`이미지 다운로드 실패: ${resp.status}`);
+          const blob = await resp.blob();
+
+          const ext = extFromPathOrUrl(url); // url에 webp/jpg 등 남아있음
+          const index = i + 1;
+          const filename = `${vName}_${date}_${index}.${ext}`;
+
+          zip.file(filename, blob);
+        }
+      }
+
+      const company = sanitizeFilename(profile?.company_name ?? "company");
+      const vendor = sanitizeFilename(vendorName || "vendor");
+      const zipName = `${company}-${vendor} 영수증.zip`;
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+
+      const a = document.createElement("a");
+      const objectUrl = URL.createObjectURL(zipBlob);
+      a.href = objectUrl;
+      a.download = zipName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+
+      setMsg("ZIP 다운로드를 시작했습니다.");
+      setTimeout(() => setMsg(""), 1200);
+    } catch (e: any) {
+      console.log("zip error:", e);
+      setMsg(e?.message ?? "ZIP 생성/다운로드 실패");
+    } finally {
+      setDownloadingZip(false);
     }
   };
 
@@ -376,10 +570,10 @@ export default function VendorExportPage() {
           {/* 텍스트보드 */}
           <div
             style={{
-              border: "1px solid #c6c6c6",
+              border: "1px solid #ffffff",
               background: "#fff",
               borderRadius: 14,
-              padding: 12,
+              padding: 0,
             }}
           >
             <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.7, marginBottom: 8 }}>
@@ -391,11 +585,10 @@ export default function VendorExportPage() {
               readOnly
               style={{
                 width: "100%",
-                minHeight: 250,
+                minHeight: 220,
                 resize: "vertical",
-                borderRadius: 12,
                 border: "1px solid #555555",
-                padding: 12,
+                padding: "10px 10px 10px 12px",
                 fontSize: 14,
                 lineHeight: 1.3,
                 outline: "none",
@@ -403,8 +596,83 @@ export default function VendorExportPage() {
             />
           </div>
 
+          {/* ✅ 전체 사진 미리보기 + ZIP 다운로드 */}
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 900 }}>선택된 사진</div>
+
+              <button
+                type="button"
+                onClick={downloadZipAll}
+                disabled={downloadingZip || signedImages.length === 0}
+                style={{
+                  marginLeft: "auto",
+                  height: 34,
+                  borderRadius: 12,
+                  border: "1px solid #0B1F5B",
+                  background: downloadingZip || signedImages.length === 0 ? "#E5E7EB" : "#ffffff",
+                  padding: "0 12px",
+                  fontSize: 13,
+                  fontWeight: 900,
+                  cursor: downloadingZip || signedImages.length === 0 ? "not-allowed" : "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  whiteSpace: "nowrap",
+                  opacity: downloadingZip ? 0.7 : 1,
+                }}
+              >
+                <Download size={16} />
+                {downloadingZip ? "ZIP 만드는 중..." : "사진 전체 다운로드"}
+              </button>
+            </div>
+
+            {signedImages.length === 0 ? (
+              <div style={{ fontSize: 13, opacity: 0.7 }}>사진이 없습니다.</div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  overflowX: "auto",
+                  whiteSpace: "nowrap",
+                  paddingBottom: 4,
+                }}
+              >
+                {signedImages
+                  .slice()
+                  .sort((a, b) => (a.receipt_id === b.receipt_id ? a.sort_order - b.sort_order : a.receipt_id.localeCompare(b.receipt_id)))
+                  .map((im, idx) => (
+                    <div
+                      key={`${im.receipt_id}_${im.sort_order}_${idx}`}
+                      style={{
+                        width: 50,
+                        height: 50,
+                        flex: "0 0 auto",
+                        borderRadius: 5,
+                        overflow: "hidden",
+                        border: "1px solid #ddd",
+                        background: "#fff",
+                      }}
+                      title={`${idx + 1}`}
+                    >
+                      <img
+                        src={im.url}
+                        alt={`thumb ${idx + 1}`}
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        onClick={() => {
+                          setLightboxIndex(idx);
+                          setLightboxOpen(true);
+                        }}
+                      />
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+
           {/* 옵션 체크박스 */}
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 8 }}>
             {/* 사업자정보 */}
             <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
               <input type="checkbox" checked={optBiz} onChange={(e) => setOptBiz(e.target.checked)} />
@@ -483,16 +751,38 @@ export default function VendorExportPage() {
                 onChange={(e) => setOptReceiverEmail(e.target.checked)}
                 style= {{marginTop: 4}}
               />
-              <div style={{ display: "grid", gap: 4 }}>
+              <div style={{ display: "flex", gap: 4 }}>
                 <div style={{ fontSize: 14, fontWeight: 900 }}>수신 이메일</div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                <div style={{ marginTop: 2, marginLeft: 5, fontSize: 12, opacity: 0.75 }}>
                   {receiverEmailText}
                 </div>
+              </div>
+            </label>
+            <div style={{ height: 8 }} />
+
+            <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={optAttachImages}
+                onChange={(e) => setOptAttachImages(e.target.checked)}
+                disabled={signedImages.length === 0}
+              />
+              <div style={{ fontSize: 14, fontWeight: 900, opacity: signedImages.length === 0 ? 0.5 : 1 }}>
+                사진 첨부
               </div>
             </label>
           </div>
         </>
       )}
+      {LightboxOpen && sortedImages.length > 0 ? (
+        <ReceiptLightbox
+          urls={sortedImages.map((x) => x.url)}
+          startIndex={LightboxIndex}
+          setIndex={(i) => setLightboxIndex(i)}
+          meta={lbMeta}
+          onClose={() => setLightboxOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -126,8 +126,14 @@ export default function NewReceiptPage() {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   // lightbox
-  const [lbOpen, setLbOpen] = useState(false);
-  const [lbIndex, setLbIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState<{
+    urls: string[];
+    startIndex: number;
+    meta?: {
+      vendorName?: string | null;
+      receiptDate?: string | null;
+    };
+  } | null>(null);
 
   const [amountDigits, setAmountDigits] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
@@ -548,8 +554,14 @@ export default function NewReceiptPage() {
                       alt={`new ${i + 1}`}
                       style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
                       onClick={() => {
-                        setLbIndex(i);
-                        setLbOpen(true);
+                        setLightboxOpen({
+                          urls: allPreviewItems.map((x) => x.src),
+                          startIndex: i,
+                          meta: {
+                            vendorName: vendorName || "vendor",
+                            receiptDate: purchaseDate, // 여기선 구매일 기준이 자연스러움
+                          },
+                        });
                       }}
                     />
                     <button
@@ -783,12 +795,12 @@ export default function NewReceiptPage() {
           </div>
         </div>
       )}
-      {lbOpen && allPreviewItems.length > 0 && (
+      {lightboxOpen && (
         <ReceiptLightbox
-        urls={allPreviewItems.map((x) => x.src as string)}
-        startIndex={lbIndex}
-        onClose={() => setLbOpen(false)}
-        setIndex={(i: number) => setLbIndex(i)}
+          urls={lightboxOpen.urls}
+          startIndex={lightboxOpen.startIndex}
+          meta={lightboxOpen.meta}
+          onClose={() => setLightboxOpen(null)}
         />
       )}
     </div>

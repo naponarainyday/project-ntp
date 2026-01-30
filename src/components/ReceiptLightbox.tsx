@@ -1,16 +1,56 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { X, Download, ChevronLeft, ChevronRight } from "lucide-react";
 
 type Props = {
   urls: Array<string | null | undefined>;
   startIndex: number;
   onClose: () => void;
   setIndex?: (i: number) => void;
+
+  meta?: {
+    vendorName?: string | null;
+    receiptDate?: string | null; // "YYYY-MM-DD" or "YY.MM.DD" or "YYMMDD"
+  };
 };
 
-export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }: Props) {
+function normalizeReceiptDate(input?: string | null) {
+  const digits = (input ?? "").replace(/\D/g, "");
+  if (digits.length === 8) return digits.slice(2);
+  if (digits.length === 6) return digits;
+  return "000000";
+}
+
+function sanitizeVendorName(input?: string | null) {
+  const base = (input ?? "").trim() || "vendor";
+  return base.replace(/\s+/g, "_").replace(/[\\/:*?"<>|]/g, "");
+}
+
+function guessExtFromUrl(url: string) {
+  const lower = url.toLowerCase();
+  if (lower.includes(".png")) return "png";
+  if (lower.includes(".webp")) return "webp";
+  if (lower.includes(".jpeg")) return "jpeg";
+  if (lower.includes(".jpg")) return "jpg";
+  return "jpg";
+}
+
+function guessExtFromContentType(ct: string | null) {
+  const c = (ct ?? "").toLowerCase();
+  if (c.includes("image/png")) return "png";
+  if (c.includes("image/webp")) return "webp";
+  if (c.includes("image/jpeg")) return "jpg";
+  return null;
+}
+
+export default function ReceiptLightbox({
+  urls,
+  startIndex,
+  onClose,
+  setIndex,
+  meta,
+}: Props) {
   const cleanUrls = useMemo(
     () => (urls ?? []).filter((u): u is string => !!u && typeof u === "string"),
     [urls]
@@ -82,6 +122,46 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
     else goNext();
   };
 
+  // ✅ 파일명(미리보기) 만들기
+  const label = useMemo(() => {
+    const vendor = sanitizeVendorName(meta?.vendorName);
+    const yymmdd = normalizeReceiptDate(meta?.receiptDate);
+    return `${vendor}_${yymmdd}_${idx + 1}`;
+  }, [meta?.vendorName, meta?.receiptDate, idx]);
+
+  // ✅ 다운로드
+  const [downloading, setDownloading] = useState(false);
+
+  const onDownload = async () => {
+    if (!currentUrl) return;
+    if (downloading) return;
+
+    setDownloading(true);
+    try {
+      const res = await fetch(currentUrl, { mode: "cors" });
+      if (!res.ok) throw new Error(`다운로드 실패 (${res.status})`);
+
+      const blob = await res.blob();
+      const ct = res.headers.get("content-type");
+      const ext = guessExtFromContentType(ct) ?? guessExtFromUrl(currentUrl);
+
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `${label}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      console.log("download error:", e);
+      // 필요하면 여기서 토스트/에러 UI 추가
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   if (!shouldOpen || !currentUrl) return null;
 
   return (
@@ -114,7 +194,7 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
           overflow: "hidden",
         }}
       >
-        {/* ✅ 카운터는 sticky로 두되, X는 floating으로 분리 */}
+        {/* ✅ sticky header */}
         <div
           style={{
             position: "sticky",
@@ -122,17 +202,64 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
             zIndex: 2,
             display: "flex",
             alignItems: "center",
+            gap: 10,
             padding: 8,
             backdropFilter: "blur(6px)",
             background: "rgba(0,0,0,0.20)",
           }}
         >
-          <div style={{ color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: 800 }}>
-            {cleanUrls.length > 1 ? `${idx + 1} / ${cleanUrls.length}` : ""}
+          {cleanUrls.length > 1 ? (
+            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap" }}>
+              {`${idx + 1} / ${cleanUrls.length}`}
+            </div>
+          ) : null}
+
+          <div
+            style={{
+              color: "rgba(255,255,255,0.88)",
+              fontSize: 12,
+              fontWeight: 900,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flex: 1,
+              minWidth: 0,
+            }}
+            title={label}
+          >
+            {label}
           </div>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload();
+            }}
+            disabled={downloading}
+            style={{
+              width: 36,
+              height: 32,
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.18)",
+              background: downloading ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.35)",
+              color: "white",
+              cursor: downloading ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              opacity: downloading ? 0.6 : 1,
+              marginRight: 60
+            }}
+            aria-label="다운로드"
+            title="다운로드"
+          >
+            <Download size={18} />
+          </button>
         </div>
 
-        {/* ✅ Floating Close (항상 보임) */}
+        {/* Floating Close */}
         <button
           type="button"
           onClick={onClose}
@@ -148,13 +275,10 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-
-            // ✅ 가시성 확보 (어떤 이미지 위에서도)
             background: "rgba(0,0,0,0.55)",
             backdropFilter: "blur(6px)",
             border: "1px solid rgba(255,255,255,0.18)",
             color: "white",
-
             cursor: "pointer",
           }}
         >
@@ -162,13 +286,7 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
         </button>
 
         {/* Image scroller */}
-        <div
-          style={{
-            flex: 1,
-            overflow: "auto",
-            WebkitOverflowScrolling: "touch",
-          }}
-        >
+        <div style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch" }}>
           <img
             src={currentUrl}
             alt="영수증 확대"
@@ -180,7 +298,7 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
           />
         </div>
 
-        {/* Prev / Next buttons */}
+        {/* Prev / Next */}
         {cleanUrls.length > 1 ? (
           <>
             <button
@@ -199,13 +317,14 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
                 border: "1px solid rgba(255,255,255,0.35)",
                 background: "rgba(0,0,0,0.35)",
                 color: "white",
-                fontSize: 22,
-                fontWeight: 900,
                 cursor: canPrev ? "pointer" : "not-allowed",
                 opacity: canPrev ? 1 : 0.35,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              ‹
+              <ChevronLeft size={22} strokeWidth={3} />
             </button>
 
             <button
@@ -224,13 +343,14 @@ export default function ReceiptLightbox({ urls, startIndex, onClose, setIndex }:
                 border: "1px solid rgba(255,255,255,0.35)",
                 background: "rgba(0,0,0,0.35)",
                 color: "white",
-                fontSize: 22,
-                fontWeight: 900,
                 cursor: canNext ? "pointer" : "not-allowed",
                 opacity: canNext ? 1 : 0.35,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              ›
+              <ChevronRight size={22} strokeWidth={3} />
             </button>
           </>
         ) : null}

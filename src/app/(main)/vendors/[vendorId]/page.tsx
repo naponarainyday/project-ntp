@@ -212,9 +212,13 @@ export default function VendorReceiptsPage() {
 
   // lightbox
   const [lightboxOpen, setLightboxOpen] = useState<{
-  urls: string[];
-  startIndex: number;
-} | null>(null);
+    urls: string[];
+    startIndex: number;
+    meta?: {
+      vendorName?: string | null;
+      receiptDate?: string | null;
+    };
+  } | null>(null);
 
   // selection + bulk
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -951,9 +955,16 @@ export default function VendorReceiptsPage() {
                                     <button
                                       key={idx}
                                       type="button"
-                                      onClick={(e) => {
+                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        setLightboxOpen({ urls, startIndex: idx });
+                                        setLightboxOpen({
+                                          urls,
+                                          startIndex: idx,
+                                          meta: {
+                                            vendorName: vendor?.name ?? null,
+                                            receiptDate: r.receipt_date ?? r.deposit_date ?? r.created_at ?? null,
+                                          },
+                                        });
                                       }}
                                       style={{
                                         border: "1px solid #eee",
@@ -1465,6 +1476,7 @@ export default function VendorReceiptsPage() {
       <ReceiptLightbox
         urls={lightboxOpen?.urls ?? []}
         startIndex={lightboxOpen?.startIndex ?? -1}
+        meta={lightboxOpen?.meta}
         onClose={() => setLightboxOpen(null)}
       />
       <ErrorPopup

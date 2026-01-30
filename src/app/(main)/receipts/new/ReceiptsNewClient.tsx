@@ -229,8 +229,14 @@ export default function ReceiptsNewClient() {
 
 
   // lightbox
-  const [lbOpen, setLbOpen] = useState(false);
-  const [lbIndex, setLbIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState<{
+    urls: string[];
+    startIndex: number;
+    meta?: {
+      vendorName?: string | null;
+      receiptDate?: string | null;
+    };
+  } | null>(null);
 
   const [taxType, setTaxType] = useState<TaxType>("tax_free");
   const [amountDigits, setAmountDigits] = useState("");
@@ -756,43 +762,6 @@ async function addFilesAsWebp(list: FileList | null) {
     ? "수정 저장"
     : "저장";
 
-  // existing + new를 한 배열로(원하면 existing 먼저, new 나중)
-  const thumbItems = useMemo(() => {
-    const existing = (isEditMode ? existingImages : [])
-      .slice()
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-      .map((img, idx) => ({
-        key: `ex_${img.path}`,
-        kind: "existing" as const,
-        src: img.url,
-        index: idx, // lightbox index 계산용
-        exists: !!img.url,
-      }))
-      .filter((x) => x.exists);
-
-    const news = newPreviews.map((src, idx) => ({
-      key: `new_${idx}_${src}`,
-      kind: "new" as const,
-      src,
-      index: idx,
-      exists: true,
-    }));
-
-    const merged = [...existing, ...news];
-
-    // ✅ 최소 3칸 유지용 placeholder 채우기
-    const fill = Math.max(0, 3 - merged.length);
-    const placeholders = Array.from({ length: fill }).map((_, i) => ({
-      key: `ph_${i}`,
-      kind: "placeholder" as const,
-      src: null as any,
-      index: -1,
-      exists: false,
-    }));
-
-    return [...merged, ...placeholders];
-  }, [isEditMode, existingImages, newPreviews]);
-
   return (
     <div style={{ margin: "0 auto", padding: 0 }}>
       {/* 상단 타이틀/뒤로 */}
@@ -1033,9 +1002,16 @@ async function addFilesAsWebp(list: FileList | null) {
                     alt={`new ${i + 1}`}
                     style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
                     onClick={() => {
-                      const offset = allPreviewItems.filter((x) => x.kind === "existing").length;
-                      setLbIndex(offset + i);
-                      setLbOpen(true);
+                      const existingCount = allPreviewItems.filter((x) => x.kind === "existing").length;
+
+                      setLightboxOpen({
+                        urls: allPreviewItems.map((x) => x.src as string),
+                        startIndex: existingCount + i,
+                        meta: {
+                          vendorName: selectedVendor?.name ?? null,
+                          receiptDate: purchaseDate ?? null,
+                        },
+                      });
                     }}
                   />
                   <button
@@ -1085,9 +1061,16 @@ async function addFilesAsWebp(list: FileList | null) {
                           alt={`existing ${i + 1}`}
                           style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }}
                           onClick={() => {
-                            setLbIndex(i); // existing은 앞쪽
-                            setLbOpen(true);
+                            setLightboxOpen({
+                              urls: allPreviewItems.map((x) => x.src as string),
+                              startIndex: i, // existing은 앞에 정렬돼 있으니 i 그대로
+                              meta: {
+                                vendorName: selectedVendor?.name ?? null,
+                                receiptDate: purchaseDate ?? null,
+                              },
+                            });
                           }}
+
                         />
                       ) : (
                         <div
@@ -1404,14 +1387,17 @@ async function addFilesAsWebp(list: FileList | null) {
           </div>
         </div>
       )}
-      {lbOpen && allPreviewItems.length > 0 && (
-      <ReceiptLightbox
-        urls={allPreviewItems.map((x) => x.src as string)}
-        startIndex={lbIndex}
-        onClose={() => setLbOpen(false)}
-        setIndex={(i: number) => setLbIndex(i)}
-      />
-    )}
+      {lightboxOpen && lightboxOpen.urls.length > 0 && (
+        <ReceiptLightbox
+          urls={lightboxOpen.urls}
+          startIndex={lightboxOpen.startIndex}
+          meta={lightboxOpen.meta}
+          onClose={() => setLightboxOpen(null)}
+          setIndex={(i: number) => {
+            setLightboxOpen((prev) => (prev ? { ...prev, startIndex: i } : prev));
+          }}
+        />
+      )}
     </div>
   );
 }
