@@ -6,7 +6,6 @@ import { supabase } from "@/lib/supabaseClient";
 import { Camera, X } from "lucide-react";
 import ReceiptLightbox from "@/components/ReceiptLightbox"
 
-
 type PaymentMethod = "cash" | "transfer" | "payable";
 type ReceiptStatus = "uploaded" | "requested" | "needs_fix" | "completed";
 type ReceiptType = "standard" | "simple";
